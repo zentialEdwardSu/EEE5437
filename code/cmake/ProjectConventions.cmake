@@ -1,5 +1,7 @@
 include_guard(GLOBAL)
 
+include(FetchContent)
+
 function(dic_collect_sources base_dir out_var)
     if(NOT EXISTS "${base_dir}")
         set(${out_var} "" PARENT_SCOPE)
@@ -25,7 +27,6 @@ function(dic_apply_interface_layout target include_dir)
         INTERFACE
         "${PROJECT_SOURCE_DIR}"
         "${PROJECT_SOURCE_DIR}/lib"
-        "${PROJECT_SOURCE_DIR}/lib/internal"
         "${include_dir}"
     )
     target_link_libraries("${target}" INTERFACE project_lib)
@@ -37,7 +38,6 @@ function(dic_apply_target_layout target include_dir)
         PUBLIC
         "${PROJECT_SOURCE_DIR}"
         "${PROJECT_SOURCE_DIR}/lib"
-        "${PROJECT_SOURCE_DIR}/lib/internal"
         "${include_dir}"
     )
 
@@ -99,7 +99,7 @@ function(dic_register_library_tree base_dir out_targets_var)
             continue()
         endif()
 
-        if(child STREQUAL "internal" OR child STREQUAL "vendor")
+        if(child MATCHES "^\\.")
             continue()
         endif()
 
@@ -121,6 +121,13 @@ function(dic_register_library_tree base_dir out_targets_var)
     set(${out_targets_var} "${dic_module_targets}" PARENT_SCOPE)
 endfunction()
 
+function(dic_register_third_party_dependencies lib_root)
+    set(third_party_file "${lib_root}/third_party.cmake")
+    if(EXISTS "${third_party_file}")
+        include("${third_party_file}")
+    endif()
+endfunction()
+
 function(dic_register_libraries lib_root)
     set(dic_module_targets "")
 
@@ -129,29 +136,19 @@ function(dic_register_libraries lib_root)
         list(APPEND dic_module_targets ${root_module_targets})
     endif()
 
-    if(EXISTS "${lib_root}/internal")
-        dic_register_library_tree("${lib_root}/internal" internal_module_targets)
-        if(internal_module_targets)
-            list(APPEND dic_module_targets ${internal_module_targets})
-        endif()
-    endif()
-
     add_library(project_lib INTERFACE)
     target_include_directories(
         project_lib
         INTERFACE
         "${PROJECT_SOURCE_DIR}"
         "${PROJECT_SOURCE_DIR}/lib"
-        "${PROJECT_SOURCE_DIR}/lib/internal"
     )
 
     if(dic_module_targets)
         target_link_libraries(project_lib INTERFACE ${dic_module_targets})
     endif()
 
-    if(EXISTS "${lib_root}/vendor/CMakeLists.txt")
-        add_subdirectory("${lib_root}/vendor" "${CMAKE_BINARY_DIR}/vendor")
-    endif()
+    dic_register_third_party_dependencies("${lib_root}")
 
     set_property(GLOBAL PROPERTY DIC_LIBRARY_TARGETS "${dic_module_targets}")
 endfunction()
