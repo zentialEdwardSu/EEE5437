@@ -96,6 +96,7 @@ void pq_drain(pqueue_t *q, void (*cb)(pq_node_t *node));
     {                                                                  \
         return pq_empty(q);                                            \
     }
+
 #define DEFINE_PQUEUE_MAX(prefix, type, pq_member, prio_field, prio_type) \
                                                                           \
     static inline int prefix##__pq_cmp(const pq_node_t *a,                \
