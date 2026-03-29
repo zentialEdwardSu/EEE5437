@@ -255,7 +255,7 @@ function(dic_add_test test_source out_target_var)
         target_link_libraries("${test_name}" PRIVATE project_homeworks)
     endif()
 
-    if(test_name MATCHES "^(hw[0-9A-Za-z_]+)_test_.+")
+    if(test_name MATCHES "^(hw[0-9A-Za-z_]+)_test(_.+)?$")
         set(homework_name "${CMAKE_MATCH_1}")
         if(NOT TARGET "${homework_name}_lib")
             message(
@@ -264,7 +264,7 @@ function(dic_add_test test_source out_target_var)
             )
         endif()
         target_link_libraries("${test_name}" PRIVATE "${homework_name}_lib")
-    elseif(test_name MATCHES "^lib_([0-9A-Za-z_]+)_test_.+")
+    elseif(test_name MATCHES "^lib_([0-9A-Za-z_]+)_test(_.+)?$")
         set(module_name "${CMAKE_MATCH_1}")
         set(module_target "lib_${module_name}")
         if(NOT TARGET "${module_target}")
@@ -278,7 +278,7 @@ function(dic_add_test test_source out_target_var)
         message(
             FATAL_ERROR
             "Test ${test_name} does not match the required naming rules: "
-            "hwX_test_* or lib_XXX_test_*."
+            "hwX_test, hwX_test_*, lib_XXX_test, or lib_XXX_test_*."
         )
     endif()
 
