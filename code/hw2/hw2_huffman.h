@@ -97,6 +97,12 @@ dic_hw2_huffman_status dic_hw2_huffman_build(
     dic_hw2_huffman_tree *tree
 );
 
+dic_hw2_huffman_status dic_hw2_huffman_build_from_counts(
+    const size_t *counts,
+    size_t symbol_count,
+    dic_hw2_huffman_tree *tree
+);
+
 dic_hw2_huffman_status dic_hw2_huffman_encode_mapped(
     const dic_hw2_huffman_tree *tree,
     const void *symbols,
@@ -137,6 +143,14 @@ const char *dic_hw2_huffman_status_message(dic_hw2_huffman_status status);
         dic_hw2_huffman_tree *tree)                                            \
     {                                                                          \
         return dic_hw2_huffman_build(probabilities, symbol_count, tree);       \
+    }                                                                          \
+                                                                               \
+    static inline dic_hw2_huffman_status prefix##_build_from_counts(           \
+        const size_t *counts,                                                  \
+        size_t symbol_count,                                                   \
+        dic_hw2_huffman_tree *tree)                                            \
+    {                                                                          \
+        return dic_hw2_huffman_build_from_counts(counts, symbol_count, tree);  \
     }                                                                          \
                                                                                \
     static inline dic_hw2_huffman_status prefix##_encode(                      \

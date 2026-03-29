@@ -166,24 +166,19 @@ void dic_hw2_binary_arithmetic_bitstream_free(dic_hw2_binary_arithmetic_bitstrea
 }
 
 dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_build_model(
-    const unsigned char *input,
-    size_t input_size,
+    const dic_hw1_text_analysis *analysis,
     dic_hw2_binary_arithmetic_model *model
 )
 {
-    size_t bit_index = 0;
-    size_t total_input_bits = input_size * 8U;
     size_t zero_count[DIC_HW2_BINARY_ARITHMETIC_CONTEXT_COUNT] = {0, 0, 0};
     size_t one_count[DIC_HW2_BINARY_ARITHMETIC_CONTEXT_COUNT] = {0, 0, 0};
-    unsigned int context = DIC_HW2_BINARY_ARITHMETIC_CONTEXT_START;
+    size_t symbol = 0;
     unsigned int i = 0;
 
-    if (model == NULL)
-        return DIC_HW2_BINARY_ARITHMETIC_INVALID_ARGUMENT;
-    if (input_size > 0 && input == NULL)
+    if (analysis == NULL || model == NULL)
         return DIC_HW2_BINARY_ARITHMETIC_INVALID_ARGUMENT;
 
-    if (total_input_bits == 0)
+    if (analysis->total_symbols == 0)
     {
         for (i = 0; i < DIC_HW2_BINARY_ARITHMETIC_CONTEXT_COUNT; ++i)
         {
@@ -194,18 +189,32 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_build_model(
         return DIC_HW2_BINARY_ARITHMETIC_OK;
     }
 
-    for (bit_index = 0; bit_index < total_input_bits; ++bit_index)
+    for (symbol = 0; symbol < DIC_HW1_SYMBOL_COUNT; ++symbol)
     {
-        const unsigned char bit = dic_hw2_get_bit(input, bit_index);
+        size_t count = analysis->counts[symbol];
+        unsigned int context = DIC_HW2_BINARY_ARITHMETIC_CONTEXT_START;
+        unsigned int bit_index = 0;
 
-        if (bit == 0)
-            ++zero_count[context];
-        else
-            ++one_count[context];
+        if (count == 0)
+            continue;
 
-        context = bit == 0
-            ? DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ZERO
-            : DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ONE;
+        /*
+         * The model resets at each byte boundary, so the transition statistics
+         * can be reconstructed exactly from HW1's byte-frequency table alone.
+         */
+        for (bit_index = 0; bit_index < 8U; ++bit_index)
+        {
+            const unsigned char bit = (unsigned char)(((unsigned int)symbol >> (7U - bit_index)) & 1U);
+
+            if (bit == 0)
+                zero_count[context] += count;
+            else
+                one_count[context] += count;
+
+            context = bit == 0
+                ? DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ZERO
+                : DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ONE;
+        }
     }
 
     for (i = 0; i < DIC_HW2_BINARY_ARITHMETIC_CONTEXT_COUNT; ++i)
@@ -245,9 +254,7 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_encode(
     uint64_t low = 0U;
     uint64_t high = DIC_HW2_BINARY_ARITHMETIC_TOP;
     size_t pending_bits = 0;
-    size_t bit_index = 0;
-    size_t total_input_bits = input_size * 8U;
-    unsigned int context = DIC_HW2_BINARY_ARITHMETIC_CONTEXT_START;
+    size_t byte_index = 0;
     dic_hw2_binary_arithmetic_bit_writer writer;
     dic_hw2_binary_arithmetic_status status;
 
@@ -260,57 +267,63 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_encode(
 
     status = dic_hw2_binary_arithmetic_writer_init(
         &writer,
-        total_input_bits + DIC_HW2_BINARY_ARITHMETIC_CODE_BITS + 64U
+        (input_size * 8U) + DIC_HW2_BINARY_ARITHMETIC_CODE_BITS + 64U
     );
     if (status != DIC_HW2_BINARY_ARITHMETIC_OK)
         return status;
 
-    for (bit_index = 0; bit_index < total_input_bits; ++bit_index)
+    for (byte_index = 0; byte_index < input_size; ++byte_index)
     {
-        const unsigned char bit = dic_hw2_get_bit(input, bit_index);
+        unsigned int context = DIC_HW2_BINARY_ARITHMETIC_CONTEXT_START;
+        unsigned int bit_index = 0;
 
-        dic_hw2_binary_arithmetic_update_range(&low, &high, model, context, bit);
-
-        for (;;)
+        for (bit_index = 0; bit_index < 8U; ++bit_index)
         {
-            if (high < DIC_HW2_BINARY_ARITHMETIC_HALF)
+            const unsigned char bit = (unsigned char)((input[byte_index] >> (7U - bit_index)) & 1U);
+
+            dic_hw2_binary_arithmetic_update_range(&low, &high, model, context, bit);
+
+            for (;;)
             {
-                status = dic_hw2_binary_arithmetic_output_bit_plus_follow(&writer, 0, &pending_bits);
-            }
-            else if (low >= DIC_HW2_BINARY_ARITHMETIC_HALF)
-            {
-                status = dic_hw2_binary_arithmetic_output_bit_plus_follow(&writer, 1, &pending_bits);
-                low -= DIC_HW2_BINARY_ARITHMETIC_HALF;
-                high -= DIC_HW2_BINARY_ARITHMETIC_HALF;
-            }
-            else if (
-                low >= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR &&
-                high < DIC_HW2_BINARY_ARITHMETIC_THIRD_QTR
-            )
-            {
-                ++pending_bits;
-                low -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
-                high -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
-                status = DIC_HW2_BINARY_ARITHMETIC_OK;
-            }
-            else
-            {
-                break;
+                if (high < DIC_HW2_BINARY_ARITHMETIC_HALF)
+                {
+                    status = dic_hw2_binary_arithmetic_output_bit_plus_follow(&writer, 0, &pending_bits);
+                }
+                else if (low >= DIC_HW2_BINARY_ARITHMETIC_HALF)
+                {
+                    status = dic_hw2_binary_arithmetic_output_bit_plus_follow(&writer, 1, &pending_bits);
+                    low -= DIC_HW2_BINARY_ARITHMETIC_HALF;
+                    high -= DIC_HW2_BINARY_ARITHMETIC_HALF;
+                }
+                else if (
+                    low >= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR &&
+                    high < DIC_HW2_BINARY_ARITHMETIC_THIRD_QTR
+                )
+                {
+                    ++pending_bits;
+                    low -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
+                    high -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
+                    status = DIC_HW2_BINARY_ARITHMETIC_OK;
+                }
+                else
+                {
+                    break;
+                }
+
+                if (status != DIC_HW2_BINARY_ARITHMETIC_OK)
+                {
+                    free(writer.bytes);
+                    return status;
+                }
+
+                low <<= 1U;
+                high = (high << 1U) | 1U;
             }
 
-            if (status != DIC_HW2_BINARY_ARITHMETIC_OK)
-            {
-                free(writer.bytes);
-                return status;
-            }
-
-            low <<= 1U;
-            high = (high << 1U) | 1U;
+            context = bit == 0
+                ? DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ZERO
+                : DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ONE;
         }
-
-        context = bit == 0
-            ? DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ZERO
-            : DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ONE;
     }
 
     ++pending_bits;
@@ -342,8 +355,7 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_decode(
     uint64_t high = DIC_HW2_BINARY_ARITHMETIC_TOP;
     uint64_t value = 0U;
     size_t bit_index = 0;
-    size_t output_bits = output_size * 8U;
-    unsigned int context = DIC_HW2_BINARY_ARITHMETIC_CONTEXT_START;
+    size_t byte_index = 0;
     dic_hw2_binary_arithmetic_bit_reader reader;
 
     if (bitstream == NULL || model == NULL)
@@ -359,48 +371,53 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_decode(
     for (bit_index = 0; bit_index < DIC_HW2_BINARY_ARITHMETIC_CODE_BITS; ++bit_index)
         value = (value << 1U) | dic_hw2_binary_arithmetic_reader_get_bit(&reader);
 
-    for (bit_index = 0; bit_index < output_bits; ++bit_index)
+    for (byte_index = 0; byte_index < output_size; ++byte_index)
     {
-        const uint64_t range = (high - low) + 1U;
-        const uint64_t split = low + ((range * model->freq0[context]) / model->total[context]);
-        const unsigned char bit = (value < split) ? 0U : 1U;
+        unsigned int context = DIC_HW2_BINARY_ARITHMETIC_CONTEXT_START;
 
-        dic_hw2_set_bit(output, bit_index, bit);
-        dic_hw2_binary_arithmetic_update_range(&low, &high, model, context, bit);
-
-        for (;;)
+        for (bit_index = 0; bit_index < 8U; ++bit_index)
         {
-            if (high < DIC_HW2_BINARY_ARITHMETIC_HALF)
+            const uint64_t range = (high - low) + 1U;
+            const uint64_t split = low + ((range * model->freq0[context]) / model->total[context]);
+            const unsigned char bit = (value < split) ? 0U : 1U;
+
+            dic_hw2_set_bit(output, (byte_index * 8U) + bit_index, bit);
+            dic_hw2_binary_arithmetic_update_range(&low, &high, model, context, bit);
+
+            for (;;)
             {
-            }
-            else if (low >= DIC_HW2_BINARY_ARITHMETIC_HALF)
-            {
-                value -= DIC_HW2_BINARY_ARITHMETIC_HALF;
-                low -= DIC_HW2_BINARY_ARITHMETIC_HALF;
-                high -= DIC_HW2_BINARY_ARITHMETIC_HALF;
-            }
-            else if (
-                low >= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR &&
-                high < DIC_HW2_BINARY_ARITHMETIC_THIRD_QTR
-            )
-            {
-                value -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
-                low -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
-                high -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
-            }
-            else
-            {
-                break;
+                if (high < DIC_HW2_BINARY_ARITHMETIC_HALF)
+                {
+                }
+                else if (low >= DIC_HW2_BINARY_ARITHMETIC_HALF)
+                {
+                    value -= DIC_HW2_BINARY_ARITHMETIC_HALF;
+                    low -= DIC_HW2_BINARY_ARITHMETIC_HALF;
+                    high -= DIC_HW2_BINARY_ARITHMETIC_HALF;
+                }
+                else if (
+                    low >= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR &&
+                    high < DIC_HW2_BINARY_ARITHMETIC_THIRD_QTR
+                )
+                {
+                    value -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
+                    low -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
+                    high -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
+                }
+                else
+                {
+                    break;
+                }
+
+                low <<= 1U;
+                high = (high << 1U) | 1U;
+                value = (value << 1U) | dic_hw2_binary_arithmetic_reader_get_bit(&reader);
             }
 
-            low <<= 1U;
-            high = (high << 1U) | 1U;
-            value = (value << 1U) | dic_hw2_binary_arithmetic_reader_get_bit(&reader);
+            context = bit == 0
+                ? DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ZERO
+                : DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ONE;
         }
-
-        context = bit == 0
-            ? DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ZERO
-            : DIC_HW2_BINARY_ARITHMETIC_CONTEXT_PREV_ONE;
     }
 
     return DIC_HW2_BINARY_ARITHMETIC_OK;
@@ -422,11 +439,12 @@ dic_hw2_codec_status dic_hw2_binary_arithmetic_codec_backend(
         return DIC_HW2_CODEC_INVALID_ARGUMENT;
     if (input_size > 0 && input == NULL)
         return DIC_HW2_CODEC_INVALID_ARGUMENT;
-    (void)analysis;
+    if (analysis == NULL)
+        return DIC_HW2_CODEC_INVALID_ARGUMENT;
 
     dic_hw2_binary_arithmetic_bitstream_init(&bitstream);
 
-    arithmetic_status = dic_hw2_binary_arithmetic_build_model(input, input_size, &model);
+    arithmetic_status = dic_hw2_binary_arithmetic_build_model(analysis, &model);
     if (arithmetic_status != DIC_HW2_BINARY_ARITHMETIC_OK)
         return DIC_HW2_CODEC_BACKEND_ERROR;
 

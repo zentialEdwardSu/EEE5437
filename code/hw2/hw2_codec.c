@@ -83,23 +83,6 @@ static dic_hw2_codec_status dic_hw2_read_file_all(
     return DIC_HW2_CODEC_OK;
 }
 
-static void dic_hw2_fill_probabilities(
-    const dic_hw1_text_analysis *analysis,
-    double probabilities[DIC_HW1_SYMBOL_COUNT]
-)
-{
-    size_t symbol = 0;
-
-    for (symbol = 0; symbol < DIC_HW1_SYMBOL_COUNT; ++symbol)
-    {
-        if (analysis->total_symbols == 0 || analysis->counts[symbol] == 0)
-            probabilities[symbol] = 0.0;
-        else
-            probabilities[symbol] =
-                (double)analysis->counts[symbol] / (double)analysis->total_symbols;
-    }
-}
-
 static size_t dic_hw2_find_max_code_bits(const dic_hw2_huffman_tree *tree)
 {
     size_t symbol = 0;
@@ -122,7 +105,6 @@ dic_hw2_codec_status dic_hw2_huffman_codec_backend(
 )
 {
     unsigned char *decoded = NULL;
-    double probabilities[DIC_HW1_SYMBOL_COUNT];
     dic_hw2_huffman_tree tree;
     dic_hw2_huffman_bitstream bitstream;
     dic_hw2_huffman_status huffman_status;
@@ -135,9 +117,12 @@ dic_hw2_codec_status dic_hw2_huffman_codec_backend(
 
     dic_hw2_huffman_tree_init(&tree);
     dic_hw2_huffman_bitstream_init(&bitstream);
-    dic_hw2_fill_probabilities(analysis, probabilities);
 
-    huffman_status = dic_hw2_byte_huffman_build(probabilities, DIC_HW1_SYMBOL_COUNT, &tree);
+    huffman_status = dic_hw2_byte_huffman_build_from_counts(
+        analysis->counts,
+        DIC_HW1_SYMBOL_COUNT,
+        &tree
+    );
     if (huffman_status != DIC_HW2_HUFFMAN_OK)
         return DIC_HW2_CODEC_BACKEND_ERROR;
 
@@ -292,7 +277,7 @@ const char *dic_hw2_codec_status_message(dic_hw2_codec_status status)
     case DIC_HW2_CODEC_MEMORY_ERROR:
         return "memory allocation failed";
     case DIC_HW2_CODEC_ANALYSIS_ERROR:
-        return "failed to compute probability distribution";
+        return "failed to analyze input statistics";
     case DIC_HW2_CODEC_BACKEND_ERROR:
         return "codec backend failed";
     case DIC_HW2_CODEC_ROUNDTRIP_MISMATCH:

@@ -35,8 +35,7 @@ void dic_hw2_binary_arithmetic_bitstream_init(dic_hw2_binary_arithmetic_bitstrea
 void dic_hw2_binary_arithmetic_bitstream_free(dic_hw2_binary_arithmetic_bitstream *bitstream);
 
 dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_build_model(
-    const unsigned char *input,
-    size_t input_size,
+    const dic_hw1_text_analysis *analysis,
     dic_hw2_binary_arithmetic_model *model
 );
 

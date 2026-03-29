@@ -333,72 +333,16 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_decode_trie(dic_hw2_huffman_
     return DIC_HW2_HUFFMAN_OK;
 }
 
-void dic_hw2_huffman_tree_init(dic_hw2_huffman_tree *tree)
-{
-    if (tree == NULL)
-        return;
-
-    tree->symbol_count = 0;
-    tree->active_symbols = 0;
-    tree->node_count = 0;
-    tree->node_capacity = 0;
-    tree->max_code_bits = 0;
-    tree->decode_node_count = 0;
-    tree->decode_node_capacity = 0;
-    tree->root_index = -1;
-    tree->symbol_to_leaf = NULL;
-    tree->nodes = NULL;
-    tree->codes = NULL;
-    tree->decode_nodes = NULL;
-}
-
 /**
- * @brief Release all dynamic storage owned by a Huffman tree.
+ * @brief Shared tree builder for probability-based and count-based inputs.
  *
- * Each canonical code owns its own bits[] buffer, so those must be freed before
- * the top-level arrays are released.
+ * Huffman construction only depends on the relative ordering of weights, so
+ * raw occurrence counts and normalized probabilities produce the same tree
+ * shape. This helper accepts already prepared positive weights and reuses the
+ * same canonical-code pipeline for both public build entry points.
  */
-void dic_hw2_huffman_tree_free(dic_hw2_huffman_tree *tree)
-{
-    size_t symbol = 0;
-
-    if (tree == NULL)
-        return;
-
-    if (tree->codes != NULL)
-    {
-        for (symbol = 0; symbol < tree->symbol_count; ++symbol)
-            free(tree->codes[symbol].bits);
-    }
-
-    free(tree->symbol_to_leaf);
-    free(tree->nodes);
-    free(tree->codes);
-    free(tree->decode_nodes);
-    dic_hw2_huffman_tree_init(tree);
-}
-
-void dic_hw2_huffman_bitstream_init(dic_hw2_huffman_bitstream *bitstream)
-{
-    if (bitstream == NULL)
-        return;
-
-    bitstream->bytes = NULL;
-    bitstream->byte_count = 0;
-    bitstream->bit_count = 0;
-}
-
-void dic_hw2_huffman_bitstream_free(dic_hw2_huffman_bitstream *bitstream)
-{
-    if (bitstream == NULL)
-        return;
-
-    free(bitstream->bytes);
-    dic_hw2_huffman_bitstream_init(bitstream);
-}
-
-dic_hw2_huffman_status dic_hw2_huffman_build(
-    const double *probabilities,
+static dic_hw2_huffman_status dic_hw2_huffman_build_from_weights(
+    const double *weights,
     size_t symbol_count,
     dic_hw2_huffman_tree *tree
 )
@@ -409,14 +353,14 @@ dic_hw2_huffman_status dic_hw2_huffman_build(
     dic_hw2_huffman_heap_item *heap_items = NULL;
     dic_hw2_huffman_status status;
 
-    if (probabilities == NULL || tree == NULL)
+    if (weights == NULL || tree == NULL)
         return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
 
     dic_hw2_huffman_tree_free(tree);
 
     for (symbol = 0; symbol < symbol_count; ++symbol)
     {
-        if (probabilities[symbol] > 0.0)
+        if (weights[symbol] > 0.0)
             ++active_symbols;
     }
 
@@ -441,7 +385,7 @@ dic_hw2_huffman_status dic_hw2_huffman_build(
 
     for (symbol = 0; symbol < symbol_count; ++symbol)
     {
-        if (probabilities[symbol] <= 0.0)
+        if (weights[symbol] <= 0.0)
             continue;
 
         /*
@@ -450,7 +394,7 @@ dic_hw2_huffman_status dic_hw2_huffman_build(
          * index in the merge tree.
          */
         tree->symbol_to_leaf[symbol] = (int)tree->node_count;
-        tree->nodes[tree->node_count].weight = probabilities[symbol];
+        tree->nodes[tree->node_count].weight = weights[symbol];
         tree->nodes[tree->node_count].parent = -1;
         tree->nodes[tree->node_count].left = -1;
         tree->nodes[tree->node_count].right = -1;
@@ -458,7 +402,7 @@ dic_hw2_huffman_status dic_hw2_huffman_build(
         tree->nodes[tree->node_count].is_leaf = 1;
 
         /* heap_items[i] mirrors nodes[i], so queue pops can recover node indices. */
-        heap_items[tree->node_count].priority = probabilities[symbol];
+        heap_items[tree->node_count].priority = weights[symbol];
         heap_items[tree->node_count].node_index = (int)tree->node_count;
         list_head_init(&heap_items[tree->node_count].queue_link.list);
         pq_push(&min_heap, &heap_items[tree->node_count].queue_link);
@@ -542,6 +486,108 @@ dic_hw2_huffman_status dic_hw2_huffman_build(
     }
 
     return DIC_HW2_HUFFMAN_OK;
+}
+
+void dic_hw2_huffman_tree_init(dic_hw2_huffman_tree *tree)
+{
+    if (tree == NULL)
+        return;
+
+    tree->symbol_count = 0;
+    tree->active_symbols = 0;
+    tree->node_count = 0;
+    tree->node_capacity = 0;
+    tree->max_code_bits = 0;
+    tree->decode_node_count = 0;
+    tree->decode_node_capacity = 0;
+    tree->root_index = -1;
+    tree->symbol_to_leaf = NULL;
+    tree->nodes = NULL;
+    tree->codes = NULL;
+    tree->decode_nodes = NULL;
+}
+
+/**
+ * @brief Release all dynamic storage owned by a Huffman tree.
+ *
+ * Each canonical code owns its own bits[] buffer, so those must be freed before
+ * the top-level arrays are released.
+ */
+void dic_hw2_huffman_tree_free(dic_hw2_huffman_tree *tree)
+{
+    size_t symbol = 0;
+
+    if (tree == NULL)
+        return;
+
+    if (tree->codes != NULL)
+    {
+        for (symbol = 0; symbol < tree->symbol_count; ++symbol)
+            free(tree->codes[symbol].bits);
+    }
+
+    free(tree->symbol_to_leaf);
+    free(tree->nodes);
+    free(tree->codes);
+    free(tree->decode_nodes);
+    dic_hw2_huffman_tree_init(tree);
+}
+
+void dic_hw2_huffman_bitstream_init(dic_hw2_huffman_bitstream *bitstream)
+{
+    if (bitstream == NULL)
+        return;
+
+    bitstream->bytes = NULL;
+    bitstream->byte_count = 0;
+    bitstream->bit_count = 0;
+}
+
+void dic_hw2_huffman_bitstream_free(dic_hw2_huffman_bitstream *bitstream)
+{
+    if (bitstream == NULL)
+        return;
+
+    free(bitstream->bytes);
+    dic_hw2_huffman_bitstream_init(bitstream);
+}
+
+dic_hw2_huffman_status dic_hw2_huffman_build(
+    const double *probabilities,
+    size_t symbol_count,
+    dic_hw2_huffman_tree *tree
+)
+{
+    return dic_hw2_huffman_build_from_weights(probabilities, symbol_count, tree);
+}
+
+dic_hw2_huffman_status dic_hw2_huffman_build_from_counts(
+    const size_t *counts,
+    size_t symbol_count,
+    dic_hw2_huffman_tree *tree
+)
+{
+    double *weights = NULL;
+    size_t symbol = 0;
+    dic_hw2_huffman_status status;
+
+    if (counts == NULL || tree == NULL)
+        return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
+
+    weights = (double *)calloc(symbol_count, sizeof(double));
+    if (weights == NULL)
+        return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+
+    /*
+     * Huffman coding only depends on relative weights, so the raw frequency
+     * table from HW1 can be used directly without a normalization pass.
+     */
+    for (symbol = 0; symbol < symbol_count; ++symbol)
+        weights[symbol] = (double)counts[symbol];
+
+    status = dic_hw2_huffman_build_from_weights(weights, symbol_count, tree);
+    free(weights);
+    return status;
 }
 
 dic_hw2_huffman_status dic_hw2_huffman_encode_mapped(
