@@ -1,20 +1,13 @@
 #pragma once
 
+#include "errors/errors.h"
+
 #include <stddef.h>
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-
-typedef enum dic_hw2_huffman_status
-{
-    DIC_HW2_HUFFMAN_OK = 0,
-    DIC_HW2_HUFFMAN_INVALID_ARGUMENT = 1,
-    DIC_HW2_HUFFMAN_MEMORY_ERROR = 2,
-    DIC_HW2_HUFFMAN_INVALID_SYMBOL = 3,
-    DIC_HW2_HUFFMAN_MALFORMED_BITSTREAM = 4
-} dic_hw2_huffman_status;
 
 /**
  * @brief One node in the temporary merge tree used to derive code lengths.
@@ -91,19 +84,19 @@ void dic_hw2_huffman_tree_free(dic_hw2_huffman_tree *tree);
 void dic_hw2_huffman_bitstream_init(dic_hw2_huffman_bitstream *bitstream);
 void dic_hw2_huffman_bitstream_free(dic_hw2_huffman_bitstream *bitstream);
 
-dic_hw2_huffman_status dic_hw2_huffman_build(
+dic_status dic_hw2_huffman_build(
     const double *probabilities,
     size_t symbol_count,
     dic_hw2_huffman_tree *tree
 );
 
-dic_hw2_huffman_status dic_hw2_huffman_build_from_counts(
+dic_status dic_hw2_huffman_build_from_counts(
     const size_t *counts,
     size_t symbol_count,
     dic_hw2_huffman_tree *tree
 );
 
-dic_hw2_huffman_status dic_hw2_huffman_encode_mapped(
+dic_status dic_hw2_huffman_encode_mapped(
     const dic_hw2_huffman_tree *tree,
     const void *symbols,
     size_t symbol_count,
@@ -112,7 +105,7 @@ dic_hw2_huffman_status dic_hw2_huffman_encode_mapped(
     dic_hw2_huffman_bitstream *bitstream
 );
 
-dic_hw2_huffman_status dic_hw2_huffman_decode_mapped(
+dic_status dic_hw2_huffman_decode_mapped(
     const dic_hw2_huffman_tree *tree,
     const dic_hw2_huffman_bitstream *bitstream,
     size_t output_symbol_count,
@@ -120,8 +113,6 @@ dic_hw2_huffman_status dic_hw2_huffman_decode_mapped(
     size_t symbol_size,
     dic_hw2_huffman_write_symbol_fn write_symbol
 );
-
-const char *dic_hw2_huffman_status_message(dic_hw2_huffman_status status);
 
 /**
  * @brief Register typed wrappers around the generic mapped encode/decode API.
@@ -137,7 +128,7 @@ const char *dic_hw2_huffman_status_message(dic_hw2_huffman_status status);
         *(symbol_type *)element = (symbol_type)symbol;                         \
     }                                                                          \
                                                                                \
-    static inline dic_hw2_huffman_status prefix##_build(                       \
+    static inline dic_status prefix##_build(                                   \
         const double *probabilities,                                           \
         size_t symbol_count,                                                   \
         dic_hw2_huffman_tree *tree)                                            \
@@ -145,7 +136,7 @@ const char *dic_hw2_huffman_status_message(dic_hw2_huffman_status status);
         return dic_hw2_huffman_build(probabilities, symbol_count, tree);       \
     }                                                                          \
                                                                                \
-    static inline dic_hw2_huffman_status prefix##_build_from_counts(           \
+    static inline dic_status prefix##_build_from_counts(                       \
         const size_t *counts,                                                  \
         size_t symbol_count,                                                   \
         dic_hw2_huffman_tree *tree)                                            \
@@ -153,7 +144,7 @@ const char *dic_hw2_huffman_status_message(dic_hw2_huffman_status status);
         return dic_hw2_huffman_build_from_counts(counts, symbol_count, tree);  \
     }                                                                          \
                                                                                \
-    static inline dic_hw2_huffman_status prefix##_encode(                      \
+    static inline dic_status prefix##_encode(                                  \
         const dic_hw2_huffman_tree *tree,                                      \
         const symbol_type *symbols,                                            \
         size_t symbol_count,                                                   \
@@ -168,7 +159,7 @@ const char *dic_hw2_huffman_status_message(dic_hw2_huffman_status status);
             bitstream);                                                        \
     }                                                                          \
                                                                                \
-    static inline dic_hw2_huffman_status prefix##_decode(                      \
+    static inline dic_status prefix##_decode(                                  \
         const dic_hw2_huffman_tree *tree,                                      \
         const dic_hw2_huffman_bitstream *bitstream,                            \
         size_t output_symbol_count,                                            \

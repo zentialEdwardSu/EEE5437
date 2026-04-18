@@ -1,0 +1,13 @@
+input=./code/assets/Clinton's speech.txt
+original_bytes=36516
+decoded_bytes=36516
+unique_symbols=71
+active_symbols=71
+entropy=4.440860 bits/symbol
+avg_code_length=4.471382 bits/symbol
+max_code_bits=14
+encoded_bits=163277
+encoded_bytes=20410
+roundtrip=match
+compression_ratio=0.558923
+compression_percent=44.11%

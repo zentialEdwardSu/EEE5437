@@ -205,23 +205,23 @@ static int dic_hw1_append(
  * @param analysis Output structure that receives the result.
  * @return A status code indicating success or failure.
  */
-dic_hw1_status dic_hw1_analyze_text(
+dic_status dic_hw1_analyze_text(
     const unsigned char* text,
     size_t text_size,
     dic_hw1_text_analysis* analysis
 ) {
     if (analysis == NULL) {
-        return DIC_HW1_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
     }
 
     if (text_size > 0 && text == NULL) {
-        return DIC_HW1_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
     }
 
     dic_hw1_reset_analysis(analysis);
     dic_hw1_accumulate(analysis, text, text_size);
     dic_hw1_finalize(analysis);
-    return DIC_HW1_OK;
+    return DIC_STATUS_OK;
 }
 
 /**
@@ -235,18 +235,18 @@ dic_hw1_status dic_hw1_analyze_text(
  * @param analysis Output structure that receives the result.
  * @return A status code indicating success or failure.
  */
-dic_hw1_status dic_hw1_analyze_file(const char* path, dic_hw1_text_analysis* analysis) {
+dic_status dic_hw1_analyze_file(const char* path, dic_hw1_text_analysis* analysis) {
     FILE* input = NULL;
     unsigned char chunk[4096];
     size_t bytes_read = 0;
 
     if (path == NULL || analysis == NULL) {
-        return DIC_HW1_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
     }
 
     input = dic_hw1_open_input_file(path);
     if (input == NULL) {
-        return DIC_HW1_FILE_OPEN_ERROR;
+        return DIC_STATUS_FILE_OPEN_ERROR;
     }
 
     dic_hw1_reset_analysis(analysis);
@@ -258,12 +258,12 @@ dic_hw1_status dic_hw1_analyze_file(const char* path, dic_hw1_text_analysis* ana
 
     if (ferror(input) != 0) {
         fclose(input);
-        return DIC_HW1_FILE_READ_ERROR;
+            return DIC_STATUS_FILE_READ_ERROR;
     }
 
     fclose(input);
     dic_hw1_finalize(analysis);
-    return DIC_HW1_OK;
+    return DIC_STATUS_OK;
 }
 
 /**
@@ -354,27 +354,4 @@ char* dic_hw1_build_report(const dic_hw1_text_analysis* analysis) {
  */
 void dic_hw1_free_report(char* report) {
     free(report);
-}
-
-/**
- * @brief Return a stable text description for a status code.
- *
- * @param status Status code to describe.
- * @return Constant string literal describing @p status.
- */
-const char* dic_hw1_status_message(dic_hw1_status status) {
-    switch (status) {
-    case DIC_HW1_OK:
-        return "ok";
-    case DIC_HW1_INVALID_ARGUMENT:
-        return "invalid argument";
-    case DIC_HW1_FILE_OPEN_ERROR:
-        return "failed to open input file";
-    case DIC_HW1_FILE_READ_ERROR:
-        return "failed to read input file";
-    case DIC_HW1_MEMORY_ERROR:
-        return "failed to allocate memory for report";
-    default:
-        return "unknown error";
-    }
 }

@@ -48,7 +48,7 @@ static void dic_hw2_set_bit(unsigned char *bytes, size_t bit_offset, unsigned ch
         bytes[bit_offset / 8] |= (unsigned char)(1U << (7U - (unsigned int)(bit_offset % 8)));
 }
 
-static dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_writer_init(
+static dic_status dic_hw2_binary_arithmetic_writer_init(
     dic_hw2_binary_arithmetic_bit_writer *writer,
     size_t capacity_bits
 )
@@ -58,49 +58,49 @@ static dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_writer_init(
     writer->capacity_bits = capacity_bits;
 
     if (capacity_bits == 0)
-        return DIC_HW2_BINARY_ARITHMETIC_OK;
+        return DIC_STATUS_OK;
 
     writer->bytes = (unsigned char *)calloc((capacity_bits + 7) / 8, sizeof(unsigned char));
     if (writer->bytes == NULL)
-        return DIC_HW2_BINARY_ARITHMETIC_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
 
-    return DIC_HW2_BINARY_ARITHMETIC_OK;
+    return DIC_STATUS_OK;
 }
 
-static dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_writer_put_bit(
+static dic_status dic_hw2_binary_arithmetic_writer_put_bit(
     dic_hw2_binary_arithmetic_bit_writer *writer,
     unsigned char bit
 )
 {
     if (writer->bit_count >= writer->capacity_bits)
-        return DIC_HW2_BINARY_ARITHMETIC_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
 
     dic_hw2_set_bit(writer->bytes, writer->bit_count, bit);
     ++writer->bit_count;
-    return DIC_HW2_BINARY_ARITHMETIC_OK;
+    return DIC_STATUS_OK;
 }
 
-static dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_output_bit_plus_follow(
+static dic_status dic_hw2_binary_arithmetic_output_bit_plus_follow(
     dic_hw2_binary_arithmetic_bit_writer *writer,
     unsigned char bit,
     size_t *pending_bits
 )
 {
-    dic_hw2_binary_arithmetic_status status;
+    dic_status status;
 
     status = dic_hw2_binary_arithmetic_writer_put_bit(writer, bit);
-    if (status != DIC_HW2_BINARY_ARITHMETIC_OK)
+    if (status != DIC_STATUS_OK)
         return status;
 
     while (*pending_bits > 0)
     {
         status = dic_hw2_binary_arithmetic_writer_put_bit(writer, (unsigned char)(bit == 0 ? 1 : 0));
-        if (status != DIC_HW2_BINARY_ARITHMETIC_OK)
+        if (status != DIC_STATUS_OK)
             return status;
         --(*pending_bits);
     }
 
-    return DIC_HW2_BINARY_ARITHMETIC_OK;
+    return DIC_STATUS_OK;
 }
 
 static void dic_hw2_binary_arithmetic_reader_init(
@@ -165,7 +165,7 @@ void dic_hw2_binary_arithmetic_bitstream_free(dic_hw2_binary_arithmetic_bitstrea
     dic_hw2_binary_arithmetic_bitstream_init(bitstream);
 }
 
-dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_build_model(
+dic_status dic_hw2_binary_arithmetic_build_model(
     const dic_hw1_text_analysis *analysis,
     dic_hw2_binary_arithmetic_model *model
 )
@@ -176,7 +176,7 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_build_model(
     unsigned int i = 0;
 
     if (analysis == NULL || model == NULL)
-        return DIC_HW2_BINARY_ARITHMETIC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     if (analysis->total_symbols == 0)
     {
@@ -186,7 +186,7 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_build_model(
             model->freq1[i] = 1U;
             model->total[i] = 2U;
         }
-        return DIC_HW2_BINARY_ARITHMETIC_OK;
+        return DIC_STATUS_OK;
     }
 
     for (symbol = 0; symbol < DIC_HW1_SYMBOL_COUNT; ++symbol)
@@ -241,10 +241,10 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_build_model(
         model->total[i] = DIC_HW2_BINARY_ARITHMETIC_SCALE;
     }
 
-    return DIC_HW2_BINARY_ARITHMETIC_OK;
+    return DIC_STATUS_OK;
 }
 
-dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_encode(
+dic_status dic_hw2_binary_arithmetic_encode(
     const unsigned char *input,
     size_t input_size,
     const dic_hw2_binary_arithmetic_model *model,
@@ -256,12 +256,12 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_encode(
     size_t pending_bits = 0;
     size_t byte_index = 0;
     dic_hw2_binary_arithmetic_bit_writer writer;
-    dic_hw2_binary_arithmetic_status status;
+    dic_status status;
 
     if (model == NULL || bitstream == NULL)
-        return DIC_HW2_BINARY_ARITHMETIC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
     if (input_size > 0 && input == NULL)
-        return DIC_HW2_BINARY_ARITHMETIC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     dic_hw2_binary_arithmetic_bitstream_free(bitstream);
 
@@ -269,7 +269,7 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_encode(
         &writer,
         (input_size * 8U) + DIC_HW2_BINARY_ARITHMETIC_CODE_BITS + 64U
     );
-    if (status != DIC_HW2_BINARY_ARITHMETIC_OK)
+    if (status != DIC_STATUS_OK)
         return status;
 
     for (byte_index = 0; byte_index < input_size; ++byte_index)
@@ -303,14 +303,14 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_encode(
                     ++pending_bits;
                     low -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
                     high -= DIC_HW2_BINARY_ARITHMETIC_FIRST_QTR;
-                    status = DIC_HW2_BINARY_ARITHMETIC_OK;
+                    status = DIC_STATUS_OK;
                 }
                 else
                 {
                     break;
                 }
 
-                if (status != DIC_HW2_BINARY_ARITHMETIC_OK)
+                if (status != DIC_STATUS_OK)
                 {
                     free(writer.bytes);
                     return status;
@@ -332,7 +332,7 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_encode(
     else
         status = dic_hw2_binary_arithmetic_output_bit_plus_follow(&writer, 1, &pending_bits);
 
-    if (status != DIC_HW2_BINARY_ARITHMETIC_OK)
+    if (status != DIC_STATUS_OK)
     {
         free(writer.bytes);
         return status;
@@ -341,10 +341,10 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_encode(
     bitstream->bytes = writer.bytes;
     bitstream->bit_count = writer.bit_count;
     bitstream->byte_count = (writer.bit_count + 7U) / 8U;
-    return DIC_HW2_BINARY_ARITHMETIC_OK;
+    return DIC_STATUS_OK;
 }
 
-dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_decode(
+dic_status dic_hw2_binary_arithmetic_decode(
     const dic_hw2_binary_arithmetic_bitstream *bitstream,
     size_t output_size,
     const dic_hw2_binary_arithmetic_model *model,
@@ -359,9 +359,9 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_decode(
     dic_hw2_binary_arithmetic_bit_reader reader;
 
     if (bitstream == NULL || model == NULL)
-        return DIC_HW2_BINARY_ARITHMETIC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
     if (output_size > 0 && output == NULL)
-        return DIC_HW2_BINARY_ARITHMETIC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     if (output_size > 0)
         memset(output, 0, output_size);
@@ -420,10 +420,10 @@ dic_hw2_binary_arithmetic_status dic_hw2_binary_arithmetic_decode(
         }
     }
 
-    return DIC_HW2_BINARY_ARITHMETIC_OK;
+    return DIC_STATUS_OK;
 }
 
-dic_hw2_codec_status dic_hw2_binary_arithmetic_codec_backend(
+dic_status dic_hw2_binary_arithmetic_codec_backend(
     const unsigned char *input,
     size_t input_size,
     const dic_hw1_text_analysis *analysis,
@@ -433,23 +433,23 @@ dic_hw2_codec_status dic_hw2_binary_arithmetic_codec_backend(
     dic_hw2_binary_arithmetic_model model;
     dic_hw2_binary_arithmetic_bitstream bitstream;
     unsigned char *decoded = NULL;
-    dic_hw2_binary_arithmetic_status arithmetic_status;
+    dic_status arithmetic_status;
 
     if (report == NULL)
-        return DIC_HW2_CODEC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
     if (input_size > 0 && input == NULL)
-        return DIC_HW2_CODEC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
     if (analysis == NULL)
-        return DIC_HW2_CODEC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     dic_hw2_binary_arithmetic_bitstream_init(&bitstream);
 
     arithmetic_status = dic_hw2_binary_arithmetic_build_model(analysis, &model);
-    if (arithmetic_status != DIC_HW2_BINARY_ARITHMETIC_OK)
+    if (arithmetic_status != DIC_STATUS_OK)
         return DIC_HW2_CODEC_BACKEND_ERROR;
 
     arithmetic_status = dic_hw2_binary_arithmetic_encode(input, input_size, &model, &bitstream);
-    if (arithmetic_status != DIC_HW2_BINARY_ARITHMETIC_OK)
+    if (arithmetic_status != DIC_STATUS_OK)
         return DIC_HW2_CODEC_BACKEND_ERROR;
 
     if (input_size > 0)
@@ -458,12 +458,12 @@ dic_hw2_codec_status dic_hw2_binary_arithmetic_codec_backend(
         if (decoded == NULL)
         {
             dic_hw2_binary_arithmetic_bitstream_free(&bitstream);
-            return DIC_HW2_CODEC_MEMORY_ERROR;
+            return DIC_STATUS_MEMORY_ERROR;
         }
     }
 
     arithmetic_status = dic_hw2_binary_arithmetic_decode(&bitstream, input_size, &model, decoded);
-    if (arithmetic_status != DIC_HW2_BINARY_ARITHMETIC_OK)
+    if (arithmetic_status != DIC_STATUS_OK)
     {
         free(decoded);
         dic_hw2_binary_arithmetic_bitstream_free(&bitstream);
@@ -487,22 +487,5 @@ dic_hw2_codec_status dic_hw2_binary_arithmetic_codec_backend(
     if (!report->roundtrip_matches)
         return DIC_HW2_CODEC_ROUNDTRIP_MISMATCH;
 
-    return DIC_HW2_CODEC_OK;
-}
-
-const char *dic_hw2_binary_arithmetic_status_message(dic_hw2_binary_arithmetic_status status)
-{
-    switch (status)
-    {
-    case DIC_HW2_BINARY_ARITHMETIC_OK:
-        return "ok";
-    case DIC_HW2_BINARY_ARITHMETIC_INVALID_ARGUMENT:
-        return "invalid argument";
-    case DIC_HW2_BINARY_ARITHMETIC_MEMORY_ERROR:
-        return "memory allocation failed";
-    case DIC_HW2_BINARY_ARITHMETIC_MALFORMED_STREAM:
-        return "malformed arithmetic stream";
-    default:
-        return "unknown error";
-    }
+    return DIC_STATUS_OK;
 }

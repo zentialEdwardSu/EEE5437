@@ -1,5 +1,7 @@
 #pragma once
 
+#include "errors/errors.h"
+
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -14,22 +16,6 @@ extern "C" {
  * the implementation suitable for plain text as well as arbitrary byte data.
  */
 enum { DIC_HW1_SYMBOL_COUNT = 256 };
-
-/**
- * @brief Status codes returned by the HW1 text analysis API.
- */
-typedef enum dic_hw1_status {
-    /** Operation completed successfully. */
-    DIC_HW1_OK = 0,
-    /** One or more arguments were invalid, such as a NULL pointer. */
-    DIC_HW1_INVALID_ARGUMENT = 1,
-    /** The input file could not be opened. */
-    DIC_HW1_FILE_OPEN_ERROR = 2,
-    /** A read error occurred while processing the input file. */
-    DIC_HW1_FILE_READ_ERROR = 3,
-    /** Memory allocation failed in a higher-level workflow. */
-    DIC_HW1_MEMORY_ERROR = 4
-} dic_hw1_status;
 
 /**
  * @brief Result of a completed byte-frequency analysis.
@@ -59,7 +45,7 @@ typedef struct dic_hw1_text_analysis {
  * @param analysis Output structure that receives the analysis result.
  * @return A status code indicating success or the reason for failure.
  */
-dic_hw1_status dic_hw1_analyze_text(
+dic_status dic_hw1_analyze_text(
     const unsigned char* text,
     size_t text_size,
     dic_hw1_text_analysis* analysis
@@ -75,7 +61,7 @@ dic_hw1_status dic_hw1_analyze_text(
  * @param analysis Output structure that receives the analysis result.
  * @return A status code indicating success or the reason for failure.
  */
-dic_hw1_status dic_hw1_analyze_file(
+dic_status dic_hw1_analyze_file(
     const char* path,
     dic_hw1_text_analysis* analysis
 );
@@ -97,17 +83,6 @@ char* dic_hw1_build_report(const dic_hw1_text_analysis* analysis);
  * @param report Report buffer to free. Passing NULL is allowed.
  */
 void dic_hw1_free_report(char* report);
-
-/**
- * @brief Convert a status code into a human-readable message string.
- *
- * The returned pointer refers to a static string literal and must not be
- * modified or freed by the caller.
- *
- * @param status Status code to describe.
- * @return Constant message string corresponding to @p status.
- */
-const char* dic_hw1_status_message(dic_hw1_status status);
 
 #ifdef __cplusplus
 }

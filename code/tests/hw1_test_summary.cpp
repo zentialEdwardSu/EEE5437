@@ -39,7 +39,7 @@ int main() {
             reinterpret_cast<const unsigned char*>("AAABCC"),
             6,
             &text_analysis
-        ) == DIC_HW1_OK,
+        ) == DIC_STATUS_OK,
         "Text analysis should succeed."
     );
     ok &= expect_true(text_analysis.total_symbols == 6, "AAABCC should have 6 total symbols.");
@@ -83,7 +83,7 @@ int main() {
     }
 
     ok &= expect_true(
-        dic_hw1_analyze_file(input_path.string().c_str(), &file_analysis) == DIC_HW1_OK,
+        dic_hw1_analyze_file(input_path.string().c_str(), &file_analysis) == DIC_STATUS_OK,
         "File analysis should succeed."
     );
     ok &= expect_true(file_analysis.total_symbols == file_content.size(), "File symbol count mismatch.");

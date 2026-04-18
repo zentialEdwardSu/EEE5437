@@ -17,7 +17,7 @@ static FILE *dic_hw2_open_binary_file(const char *path)
 #endif
 }
 
-static dic_hw2_codec_status dic_hw2_read_file_all(
+static dic_status dic_hw2_read_file_all(
     const char *path,
     unsigned char **buffer,
     size_t *size
@@ -28,45 +28,45 @@ static dic_hw2_codec_status dic_hw2_read_file_all(
     size_t read_size = 0;
 
     if (path == NULL || buffer == NULL || size == NULL)
-        return DIC_HW2_CODEC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     *buffer = NULL;
     *size = 0;
 
     input = dic_hw2_open_binary_file(path);
     if (input == NULL)
-        return DIC_HW2_CODEC_FILE_OPEN_ERROR;
+        return DIC_STATUS_FILE_OPEN_ERROR;
 
     if (fseek(input, 0, SEEK_END) != 0)
     {
         fclose(input);
-        return DIC_HW2_CODEC_FILE_READ_ERROR;
+        return DIC_STATUS_FILE_READ_ERROR;
     }
 
     length = ftell(input);
     if (length < 0)
     {
         fclose(input);
-        return DIC_HW2_CODEC_FILE_READ_ERROR;
+        return DIC_STATUS_FILE_READ_ERROR;
     }
 
     if (fseek(input, 0, SEEK_SET) != 0)
     {
         fclose(input);
-        return DIC_HW2_CODEC_FILE_READ_ERROR;
+        return DIC_STATUS_FILE_READ_ERROR;
     }
 
     if (length == 0)
     {
         fclose(input);
-        return DIC_HW2_CODEC_OK;
+        return DIC_STATUS_OK;
     }
 
     *buffer = (unsigned char *)malloc((size_t)length);
     if (*buffer == NULL)
     {
         fclose(input);
-        return DIC_HW2_CODEC_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
     }
 
     read_size = fread(*buffer, 1, (size_t)length, input);
@@ -75,12 +75,12 @@ static dic_hw2_codec_status dic_hw2_read_file_all(
         free(*buffer);
         *buffer = NULL;
         fclose(input);
-        return DIC_HW2_CODEC_FILE_READ_ERROR;
+        return DIC_STATUS_FILE_READ_ERROR;
     }
 
     *size = read_size;
     fclose(input);
-    return DIC_HW2_CODEC_OK;
+    return DIC_STATUS_OK;
 }
 
 static size_t dic_hw2_find_max_code_bits(const dic_hw2_huffman_tree *tree)
@@ -97,7 +97,7 @@ static size_t dic_hw2_find_max_code_bits(const dic_hw2_huffman_tree *tree)
     return max_bits;
 }
 
-dic_hw2_codec_status dic_hw2_huffman_codec_backend(
+dic_status dic_hw2_huffman_codec_backend(
     const unsigned char *input,
     size_t input_size,
     const dic_hw1_text_analysis *analysis,
@@ -107,13 +107,13 @@ dic_hw2_codec_status dic_hw2_huffman_codec_backend(
     unsigned char *decoded = NULL;
     dic_hw2_huffman_tree tree;
     dic_hw2_huffman_bitstream bitstream;
-    dic_hw2_huffman_status huffman_status;
+    dic_status huffman_status;
 
     if (analysis == NULL || report == NULL)
-        return DIC_HW2_CODEC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     if (input_size > 0 && input == NULL)
-        return DIC_HW2_CODEC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     dic_hw2_huffman_tree_init(&tree);
     dic_hw2_huffman_bitstream_init(&bitstream);
@@ -123,11 +123,11 @@ dic_hw2_codec_status dic_hw2_huffman_codec_backend(
         DIC_HW1_SYMBOL_COUNT,
         &tree
     );
-    if (huffman_status != DIC_HW2_HUFFMAN_OK)
+    if (huffman_status != DIC_STATUS_OK)
         return DIC_HW2_CODEC_BACKEND_ERROR;
 
     huffman_status = dic_hw2_byte_huffman_encode(&tree, input, input_size, &bitstream);
-    if (huffman_status != DIC_HW2_HUFFMAN_OK)
+    if (huffman_status != DIC_STATUS_OK)
     {
         dic_hw2_huffman_tree_free(&tree);
         dic_hw2_huffman_bitstream_free(&bitstream);
@@ -141,12 +141,12 @@ dic_hw2_codec_status dic_hw2_huffman_codec_backend(
         {
             dic_hw2_huffman_tree_free(&tree);
             dic_hw2_huffman_bitstream_free(&bitstream);
-            return DIC_HW2_CODEC_MEMORY_ERROR;
+            return DIC_STATUS_MEMORY_ERROR;
         }
     }
 
     huffman_status = dic_hw2_byte_huffman_decode(&tree, &bitstream, input_size, decoded);
-    if (huffman_status != DIC_HW2_HUFFMAN_OK)
+    if (huffman_status != DIC_STATUS_OK)
     {
         free(decoded);
         dic_hw2_huffman_tree_free(&tree);
@@ -172,10 +172,10 @@ dic_hw2_codec_status dic_hw2_huffman_codec_backend(
     if (!report->roundtrip_matches)
         return DIC_HW2_CODEC_ROUNDTRIP_MISMATCH;
 
-    return DIC_HW2_CODEC_OK;
+    return DIC_STATUS_OK;
 }
 
-dic_hw2_codec_status dic_hw2_codec_run_file(
+dic_status dic_hw2_codec_run_file(
     const char *path,
     dic_hw2_codec_backend_fn backend,
     dic_hw2_codec_report *report
@@ -183,20 +183,20 @@ dic_hw2_codec_status dic_hw2_codec_run_file(
 {
     unsigned char *original = NULL;
     size_t original_size = 0;
-    dic_hw1_status analysis_status;
-    dic_hw2_codec_status status;
+    dic_status analysis_status;
+    dic_status status;
 
     if (path == NULL || backend == NULL || report == NULL)
-        return DIC_HW2_CODEC_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     memset(report, 0, sizeof(*report));
 
     status = dic_hw2_read_file_all(path, &original, &original_size);
-    if (status != DIC_HW2_CODEC_OK)
+    if (status != DIC_STATUS_OK)
         return status;
 
     analysis_status = dic_hw1_analyze_text(original, original_size, &report->analysis);
-    if (analysis_status != DIC_HW1_OK)
+    if (analysis_status != DIC_STATUS_OK)
     {
         free(original);
         return DIC_HW2_CODEC_ANALYSIS_ERROR;
@@ -260,29 +260,4 @@ char *dic_hw2_codec_build_report(
     }
 
     return buffer;
-}
-
-const char *dic_hw2_codec_status_message(dic_hw2_codec_status status)
-{
-    switch (status)
-    {
-    case DIC_HW2_CODEC_OK:
-        return "ok";
-    case DIC_HW2_CODEC_INVALID_ARGUMENT:
-        return "invalid argument";
-    case DIC_HW2_CODEC_FILE_OPEN_ERROR:
-        return "failed to open input file";
-    case DIC_HW2_CODEC_FILE_READ_ERROR:
-        return "failed to read input file";
-    case DIC_HW2_CODEC_MEMORY_ERROR:
-        return "memory allocation failed";
-    case DIC_HW2_CODEC_ANALYSIS_ERROR:
-        return "failed to analyze input statistics";
-    case DIC_HW2_CODEC_BACKEND_ERROR:
-        return "codec backend failed";
-    case DIC_HW2_CODEC_ROUNDTRIP_MISMATCH:
-        return "decoded content does not match the original input";
-    default:
-        return "unknown error";
-    }
 }

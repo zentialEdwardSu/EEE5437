@@ -4,7 +4,7 @@
 int main(void)
 {
     dic_hw2_codec_report report;
-    dic_hw2_codec_status status;
+    dic_status status;
 
     status = dic_hw2_codec_run_file(
         "code/assets/Clinton's speech.txt",
@@ -12,7 +12,7 @@ int main(void)
         &report
     );
 
-    DIC_EXPECT(status == DIC_HW2_CODEC_OK);
+    DIC_EXPECT(status == DIC_STATUS_OK);
     DIC_EXPECT(report.roundtrip_matches);
     DIC_EXPECT(report.original_bytes > 0);
     DIC_EXPECT(report.decoded_bytes == report.original_bytes);

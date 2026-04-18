@@ -23,12 +23,12 @@ int main(void)
 {
     const double probabilities[] = {0.4, 0.3, 0.2, 0.1};
     dic_hw2_huffman_tree tree;
-    dic_hw2_huffman_status status;
+    dic_status status;
 
     dic_hw2_huffman_tree_init(&tree);
     status = dic_hw2_huffman_build(probabilities, 4, &tree);
 
-    DIC_EXPECT(status == DIC_HW2_HUFFMAN_OK);
+    DIC_EXPECT(status == DIC_STATUS_OK);
     DIC_EXPECT(tree.active_symbols == 4);
     DIC_EXPECT(tree.max_code_bits == 3);
 

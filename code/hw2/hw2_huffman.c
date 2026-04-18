@@ -93,7 +93,7 @@ static void dic_hw2_huffman_increment_bits(unsigned char *bits, size_t bit_lengt
  * decode_nodes[] is a dense array, and child[0]/child[1] are integer indices
  * into that same array.
  */
-static dic_hw2_huffman_status dic_hw2_huffman_append_decode_node(
+static dic_status dic_hw2_huffman_append_decode_node(
     dic_hw2_huffman_tree *tree,
     int *out_index
 )
@@ -101,7 +101,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_append_decode_node(
     dic_hw2_huffman_decode_node *node = NULL;
 
     if (tree->decode_node_count >= tree->decode_node_capacity)
-        return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
 
     node = &tree->decode_nodes[tree->decode_node_count];
     node->child[0] = -1;
@@ -110,7 +110,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_append_decode_node(
     node->is_leaf = 0;
     *out_index = (int)tree->decode_node_count;
     ++tree->decode_node_count;
-    return DIC_HW2_HUFFMAN_OK;
+    return DIC_STATUS_OK;
 }
 
 /**
@@ -119,7 +119,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_append_decode_node(
  * node_capacity depends on the number of active symbols, not the raw symbol
  * count. A full binary tree with L leaves contains exactly 2 * L - 1 nodes.
  */
-static dic_hw2_huffman_status dic_hw2_huffman_allocate_tree(
+static dic_status dic_hw2_huffman_allocate_tree(
     dic_hw2_huffman_tree *tree,
     size_t symbol_count,
     size_t active_symbols
@@ -135,7 +135,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_allocate_tree(
     tree->symbol_to_leaf = (int *)malloc(symbol_count * sizeof(int));
     tree->codes = (dic_hw2_huffman_code *)calloc(symbol_count, sizeof(dic_hw2_huffman_code));
     if (tree->symbol_to_leaf == NULL || tree->codes == NULL)
-        return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
 
     for (symbol = 0; symbol < symbol_count; ++symbol)
         tree->symbol_to_leaf[symbol] = -1;
@@ -144,10 +144,10 @@ static dic_hw2_huffman_status dic_hw2_huffman_allocate_tree(
     {
         tree->nodes = (dic_hw2_huffman_node *)calloc(tree->node_capacity, sizeof(dic_hw2_huffman_node));
         if (tree->nodes == NULL)
-            return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+            return DIC_STATUS_MEMORY_ERROR;
     }
 
-    return DIC_HW2_HUFFMAN_OK;
+    return DIC_STATUS_OK;
 }
 
 /**
@@ -156,7 +156,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_allocate_tree(
  * symbol_to_leaf[s] gives O(1) access to the leaf index for symbol s. Walking
  * parent links from that leaf up to the root yields the Huffman code length.
  */
-static dic_hw2_huffman_status dic_hw2_huffman_collect_code_lengths(dic_hw2_huffman_tree *tree)
+static dic_status dic_hw2_huffman_collect_code_lengths(dic_hw2_huffman_tree *tree)
 {
     size_t symbol = 0;
 
@@ -186,7 +186,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_collect_code_lengths(dic_hw2_huffm
             tree->max_code_bits = bit_length;
     }
 
-    return DIC_HW2_HUFFMAN_OK;
+    return DIC_STATUS_OK;
 }
 
 /**
@@ -198,7 +198,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_collect_code_lengths(dic_hw2_huffm
  * - current_bits[] acts as a binary counter
  * - tree->codes[symbol].bits receives a dedicated copy of the canonical bits
  */
-static dic_hw2_huffman_status dic_hw2_huffman_build_canonical_codes(dic_hw2_huffman_tree *tree)
+static dic_status dic_hw2_huffman_build_canonical_codes(dic_hw2_huffman_tree *tree)
 {
     dic_hw2_huffman_length_entry *entries = NULL;
     unsigned char *current_bits = NULL;
@@ -208,7 +208,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_canonical_codes(dic_hw2_huff
     size_t index = 0;
 
     if (tree->active_symbols == 0)
-        return DIC_HW2_HUFFMAN_OK;
+        return DIC_STATUS_OK;
 
     entries = (dic_hw2_huffman_length_entry *)malloc(tree->active_symbols * sizeof(dic_hw2_huffman_length_entry));
     current_bits = (unsigned char *)calloc(tree->max_code_bits, sizeof(unsigned char));
@@ -216,7 +216,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_canonical_codes(dic_hw2_huff
     {
         free(entries);
         free(current_bits);
-        return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
     }
 
     for (symbol = 0; symbol < tree->symbol_count; ++symbol)
@@ -259,7 +259,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_canonical_codes(dic_hw2_huff
         {
             free(entries);
             free(current_bits);
-            return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+            return DIC_STATUS_MEMORY_ERROR;
         }
 
         memcpy(code->bits, current_bits, code->bit_length);
@@ -267,21 +267,21 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_canonical_codes(dic_hw2_huff
 
     free(entries);
     free(current_bits);
-    return DIC_HW2_HUFFMAN_OK;
+    return DIC_STATUS_OK;
 }
 
 /**
  * @brief Build a decode trie from canonical codes.
  */
-static dic_hw2_huffman_status dic_hw2_huffman_build_decode_trie(dic_hw2_huffman_tree *tree)
+static dic_status dic_hw2_huffman_build_decode_trie(dic_hw2_huffman_tree *tree)
 {
     size_t symbol = 0;
     size_t total_code_bits = 0;
     int root_index = -1;
-    dic_hw2_huffman_status status;
+    dic_status status;
 
     if (tree->active_symbols == 0)
-        return DIC_HW2_HUFFMAN_OK;
+        return DIC_STATUS_OK;
 
     for (symbol = 0; symbol < tree->symbol_count; ++symbol)
         total_code_bits += tree->codes[symbol].bit_length;
@@ -292,11 +292,11 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_decode_trie(dic_hw2_huffman_
         sizeof(dic_hw2_huffman_decode_node)
     );
     if (tree->decode_nodes == NULL)
-        return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
 
     tree->decode_node_count = 0;
     status = dic_hw2_huffman_append_decode_node(tree, &root_index);
-    if (status != DIC_HW2_HUFFMAN_OK)
+    if (status != DIC_STATUS_OK)
         return status;
     tree->root_index = root_index;
 
@@ -318,7 +318,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_decode_trie(dic_hw2_huffman_
             {
                 /* Materialize this prefix only when it is first needed. */
                 status = dic_hw2_huffman_append_decode_node(tree, &next_index);
-                if (status != DIC_HW2_HUFFMAN_OK)
+                if (status != DIC_STATUS_OK)
                     return status;
                 tree->decode_nodes[node_index].child[bit] = next_index;
             }
@@ -330,7 +330,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_decode_trie(dic_hw2_huffman_
         tree->decode_nodes[node_index].symbol = symbol;
     }
 
-    return DIC_HW2_HUFFMAN_OK;
+    return DIC_STATUS_OK;
 }
 
 /**
@@ -341,7 +341,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_decode_trie(dic_hw2_huffman_
  * shape. This helper accepts already prepared positive weights and reuses the
  * same canonical-code pipeline for both public build entry points.
  */
-static dic_hw2_huffman_status dic_hw2_huffman_build_from_weights(
+static dic_status dic_hw2_huffman_build_from_weights(
     const double *weights,
     size_t symbol_count,
     dic_hw2_huffman_tree *tree
@@ -351,10 +351,10 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_from_weights(
     size_t symbol = 0;
     pqueue_t min_heap;
     dic_hw2_huffman_heap_item *heap_items = NULL;
-    dic_hw2_huffman_status status;
+    dic_status status;
 
     if (weights == NULL || tree == NULL)
-        return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     dic_hw2_huffman_tree_free(tree);
 
@@ -365,20 +365,20 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_from_weights(
     }
 
     status = dic_hw2_huffman_allocate_tree(tree, symbol_count, active_symbols);
-    if (status != DIC_HW2_HUFFMAN_OK)
+    if (status != DIC_STATUS_OK)
     {
         dic_hw2_huffman_tree_free(tree);
         return status;
     }
 
     if (active_symbols == 0)
-        return DIC_HW2_HUFFMAN_OK;
+        return DIC_STATUS_OK;
 
     heap_items = (dic_hw2_huffman_heap_item *)calloc(tree->node_capacity, sizeof(dic_hw2_huffman_heap_item));
     if (heap_items == NULL)
     {
         dic_hw2_huffman_tree_free(tree);
-        return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
     }
 
     pq_init(&min_heap, dic_hw2_huffman_heap_compare);
@@ -437,7 +437,7 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_from_weights(
             {
                 free(heap_items);
                 dic_hw2_huffman_tree_free(tree);
-                return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
+                return DIC_STATUS_INVALID_ARGUMENT;
             }
 
             tree->nodes[left_index].parent = (int)tree->node_count;
@@ -465,27 +465,27 @@ static dic_hw2_huffman_status dic_hw2_huffman_build_from_weights(
     free(heap_items);
 
     status = dic_hw2_huffman_collect_code_lengths(tree);
-    if (status != DIC_HW2_HUFFMAN_OK)
+    if (status != DIC_STATUS_OK)
     {
         dic_hw2_huffman_tree_free(tree);
         return status;
     }
 
     status = dic_hw2_huffman_build_canonical_codes(tree);
-    if (status != DIC_HW2_HUFFMAN_OK)
+    if (status != DIC_STATUS_OK)
     {
         dic_hw2_huffman_tree_free(tree);
         return status;
     }
 
     status = dic_hw2_huffman_build_decode_trie(tree);
-    if (status != DIC_HW2_HUFFMAN_OK)
+    if (status != DIC_STATUS_OK)
     {
         dic_hw2_huffman_tree_free(tree);
         return status;
     }
 
-    return DIC_HW2_HUFFMAN_OK;
+    return DIC_STATUS_OK;
 }
 
 void dic_hw2_huffman_tree_init(dic_hw2_huffman_tree *tree)
@@ -552,7 +552,7 @@ void dic_hw2_huffman_bitstream_free(dic_hw2_huffman_bitstream *bitstream)
     dic_hw2_huffman_bitstream_init(bitstream);
 }
 
-dic_hw2_huffman_status dic_hw2_huffman_build(
+dic_status dic_hw2_huffman_build(
     const double *probabilities,
     size_t symbol_count,
     dic_hw2_huffman_tree *tree
@@ -561,7 +561,7 @@ dic_hw2_huffman_status dic_hw2_huffman_build(
     return dic_hw2_huffman_build_from_weights(probabilities, symbol_count, tree);
 }
 
-dic_hw2_huffman_status dic_hw2_huffman_build_from_counts(
+dic_status dic_hw2_huffman_build_from_counts(
     const size_t *counts,
     size_t symbol_count,
     dic_hw2_huffman_tree *tree
@@ -569,14 +569,14 @@ dic_hw2_huffman_status dic_hw2_huffman_build_from_counts(
 {
     double *weights = NULL;
     size_t symbol = 0;
-    dic_hw2_huffman_status status;
+    dic_status status;
 
     if (counts == NULL || tree == NULL)
-        return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     weights = (double *)calloc(symbol_count, sizeof(double));
     if (weights == NULL)
-        return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
 
     /*
      * Huffman coding only depends on relative weights, so the raw frequency
@@ -590,7 +590,7 @@ dic_hw2_huffman_status dic_hw2_huffman_build_from_counts(
     return status;
 }
 
-dic_hw2_huffman_status dic_hw2_huffman_encode_mapped(
+dic_status dic_hw2_huffman_encode_mapped(
     const dic_hw2_huffman_tree *tree,
     const void *symbols,
     size_t symbol_count,
@@ -604,10 +604,10 @@ dic_hw2_huffman_status dic_hw2_huffman_encode_mapped(
     const unsigned char *cursor = (const unsigned char *)symbols;
 
     if (tree == NULL || map_symbol == NULL || bitstream == NULL)
-        return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     if (symbol_count > 0 && (symbols == NULL || symbol_size == 0))
-        return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     dic_hw2_huffman_bitstream_free(bitstream);
 
@@ -625,13 +625,13 @@ dic_hw2_huffman_status dic_hw2_huffman_encode_mapped(
 
     bitstream->byte_count = (bitstream->bit_count + 7) / 8;
     if (bitstream->byte_count == 0)
-        return DIC_HW2_HUFFMAN_OK;
+        return DIC_STATUS_OK;
 
     bitstream->bytes = (unsigned char *)calloc(bitstream->byte_count, sizeof(unsigned char));
     if (bitstream->bytes == NULL)
     {
         dic_hw2_huffman_bitstream_init(bitstream);
-        return DIC_HW2_HUFFMAN_MEMORY_ERROR;
+        return DIC_STATUS_MEMORY_ERROR;
     }
 
     for (index = 0; index < symbol_count; ++index)
@@ -655,10 +655,10 @@ dic_hw2_huffman_status dic_hw2_huffman_encode_mapped(
         }
     }
 
-    return DIC_HW2_HUFFMAN_OK;
+    return DIC_STATUS_OK;
 }
 
-dic_hw2_huffman_status dic_hw2_huffman_decode_mapped(
+dic_status dic_hw2_huffman_decode_mapped(
     const dic_hw2_huffman_tree *tree,
     const dic_hw2_huffman_bitstream *bitstream,
     size_t output_symbol_count,
@@ -673,13 +673,13 @@ dic_hw2_huffman_status dic_hw2_huffman_decode_mapped(
     int node_index = 0;
 
     if (tree == NULL || bitstream == NULL || write_symbol == NULL)
-        return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     if (output_symbol_count > 0 && (output_symbols == NULL || symbol_size == 0))
-        return DIC_HW2_HUFFMAN_INVALID_ARGUMENT;
+        return DIC_STATUS_INVALID_ARGUMENT;
 
     if (output_symbol_count == 0)
-        return DIC_HW2_HUFFMAN_OK;
+        return DIC_STATUS_OK;
 
     if (tree->active_symbols == 0 || tree->decode_nodes == NULL || tree->root_index < 0)
         return DIC_HW2_HUFFMAN_MALFORMED_BITSTREAM;
@@ -693,7 +693,7 @@ dic_hw2_huffman_status dic_hw2_huffman_decode_mapped(
             {
                 for (produced = 0; produced < output_symbol_count; ++produced)
                     write_symbol(cursor + (produced * symbol_size), (unsigned int)symbol);
-                return DIC_HW2_HUFFMAN_OK;
+                return DIC_STATUS_OK;
             }
         }
         return DIC_HW2_HUFFMAN_MALFORMED_BITSTREAM;
@@ -723,24 +723,5 @@ dic_hw2_huffman_status dic_hw2_huffman_decode_mapped(
     if (produced != output_symbol_count || node_index != tree->root_index)
         return DIC_HW2_HUFFMAN_MALFORMED_BITSTREAM;
 
-    return DIC_HW2_HUFFMAN_OK;
-}
-
-const char *dic_hw2_huffman_status_message(dic_hw2_huffman_status status)
-{
-    switch (status)
-    {
-    case DIC_HW2_HUFFMAN_OK:
-        return "ok";
-    case DIC_HW2_HUFFMAN_INVALID_ARGUMENT:
-        return "invalid argument";
-    case DIC_HW2_HUFFMAN_MEMORY_ERROR:
-        return "memory allocation failed";
-    case DIC_HW2_HUFFMAN_INVALID_SYMBOL:
-        return "input contains a symbol without a Huffman code";
-    case DIC_HW2_HUFFMAN_MALFORMED_BITSTREAM:
-        return "malformed Huffman bitstream";
-    default:
-        return "unknown error";
-    }
+    return DIC_STATUS_OK;
 }
