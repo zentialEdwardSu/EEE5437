@@ -1,0 +1,9 @@
+#pragma once
+
+#ifdef DEBUG
+#include <stdio.h>
+#define DIC_J2K_DEBUG_ENTER()                                                   \
+    fprintf(stderr, "[DIC-J2K] %s:%d enter %s\n", __FILE__, __LINE__, __func__)
+#else
+#define DIC_J2K_DEBUG_ENTER() ((void)0)
+#endif

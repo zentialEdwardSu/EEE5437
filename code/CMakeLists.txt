@@ -23,6 +23,19 @@ enable_testing()
 
 dic_register_libraries("${CMAKE_CURRENT_SOURCE_DIR}/lib")
 dic_register_homeworks("${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_library(
+    finalproj_impl
+    STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/finalproj/finalproj_codec.c"
+)
+dic_apply_target_layout(finalproj_impl "${CMAKE_CURRENT_SOURCE_DIR}/finalproj")
+target_link_libraries(finalproj_impl PUBLIC project_lib hw2_impl)
+
+add_executable(finalproj "${CMAKE_CURRENT_SOURCE_DIR}/finalproj/main.c")
+dic_apply_target_layout(finalproj "${CMAKE_CURRENT_SOURCE_DIR}/finalproj")
+target_link_libraries(finalproj PRIVATE finalproj_impl)
+
 dic_register_tests("${CMAKE_CURRENT_SOURCE_DIR}/tests")
 
 dic_create_aggregate_target(homeworks DIC_HOMEWORK_BUILD_TARGETS)
