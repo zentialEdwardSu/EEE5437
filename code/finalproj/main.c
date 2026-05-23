@@ -23,6 +23,11 @@ static void finalproj_print_usage(void)
         "  finalproj roi-codec <input.pgm|input.ppm> <q> <bitplanes>\n"
         "  finalproj j2k-encode <input.pgm|input.ppm> <output.j2k>\n"
         "  finalproj jp2-encode <input.pgm|input.ppm> <output.jp2>\n"
+        "  finalproj jp2-tile-encode <input.pgm|input.ppm> <output.jp2> <tile-size|auto> <layers>\n"
+        "  finalproj j2k-decode <input.j2k> <output.pgm|output.ppm>\n"
+        "  finalproj jp2-decode <input.jp2> <output.pgm|output.ppm>\n"
+        "  finalproj j2k-decode-layer <input.j2k> <output.pgm|output.ppm> <layers-to-decode>\n"
+        "  finalproj jp2-decode-layer <input.jp2> <output.pgm|output.ppm> <layers-to-decode>\n"
         "  finalproj j2k-stub <input.pgm|input.ppm> <output.j2k>\n"
         "  finalproj jp2-stub <input.pgm|input.ppm> <output.jp2>\n"
         "  finalproj j2k-info <input.j2k>\n"
@@ -452,6 +457,76 @@ int main(int argc, char **argv)
         if (!ok)
         {
             fprintf(stderr, "error: failed to write JP2 file\n");
+            return 1;
+        }
+
+        printf("wrote %s\n", argv[3]);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "jp2-tile-encode") == 0)
+    {
+        int tile_size = 0;
+        int layers = 0;
+
+        if (argc != 6
+            || (strcmp(argv[4], "auto") != 0 && !finalproj_parse_positive_int(argv[4], &tile_size))
+            || !finalproj_parse_positive_int(argv[5], &layers))
+        {
+            finalproj_print_usage();
+            return 1;
+        }
+
+        if (!imageWriteJP2Tiled(argv[2], argv[3], tile_size, layers))
+        {
+            fprintf(stderr, "error: failed to write tiled JP2 file\n");
+            return 1;
+        }
+
+        printf("wrote %s\n", argv[3]);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "j2k-decode") == 0 || strcmp(argv[1], "jp2-decode") == 0)
+    {
+        int ok;
+
+        if (argc != 4)
+        {
+            finalproj_print_usage();
+            return 1;
+        }
+
+        ok = strcmp(argv[1], "j2k-decode") == 0
+            ? imageReadJ2K(argv[2], argv[3])
+            : imageReadJP2(argv[2], argv[3]);
+        if (!ok)
+        {
+            fprintf(stderr, "error: failed to decode JPEG 2000 image\n");
+            return 1;
+        }
+
+        printf("wrote %s\n", argv[3]);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "j2k-decode-layer") == 0 || strcmp(argv[1], "jp2-decode-layer") == 0)
+    {
+        int ok;
+        int layers = 0;
+
+        if (argc != 5 || !finalproj_parse_positive_int(argv[4], &layers) || layers > 65535)
+        {
+            finalproj_print_usage();
+            return 1;
+        }
+
+        ok = strcmp(argv[1], "j2k-decode-layer") == 0
+            ? imageReadJ2KLayers(argv[2], argv[3], layers)
+            : imageReadJP2Layers(argv[2], argv[3], layers);
+        if (!ok)
+        {
+            fprintf(stderr, "error: failed to decode JPEG 2000 image layer prefix\n");
             return 1;
         }
 

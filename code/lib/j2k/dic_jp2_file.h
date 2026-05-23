@@ -28,6 +28,13 @@ dic_status dic_jp2_write_file_with_codestream_payload(
     size_t payload_size
 );
 
+dic_status dic_jp2_write_file_with_codestream_tile_parts(
+    const char *path,
+    const dic_j2k_basic_params *params,
+    const dic_j2k_tile_part_payload *tile_parts,
+    size_t tile_part_count
+);
+
 #ifdef __cplusplus
 }
 #endif

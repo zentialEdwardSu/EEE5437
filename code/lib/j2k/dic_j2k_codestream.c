@@ -5,7 +5,12 @@
  * This file implements the minimal SOC/SIZ/COD/RGN/QCD/SOT/SOD/EOC writer used by the
  * project tests and by the JP2 wrapper. It also assembles simple packet payloads produced
  * by the local EBCOT path. The implementation intentionally writes a constrained single-tile
- * codestream and does not attempt to expose every marker segment permitted by Annex A.
+ * codestream and does not attempt to expose every marker segment permitted by Annex A. When
+ * SOP or EPH is requested through the COD Scod flags, callers are responsible for supplying
+ * payload bytes that already contain those in-bit-stream markers at packet boundaries. The
+ * writer also supports explicit COD maximum-precinct-size signalling while keeping packet
+ * assembly constrained to the project's single-precinct layout. Multi-tile output is written
+ * as one tile-part per tile by callers that provide per-tile payloads.
  *
  * References: dic_j2k_codestream.h for public parameters, dic_j2k_packet.h for Annex B
  * packet payload construction, dic_jp2_file.c for Annex I file wrapping, and T.800 Annex J
@@ -19,6 +24,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex A.2-A.4, codestream marker syntax. */
 static FILE *dic_j2k_open_file(const char *path, const char *mode)
@@ -64,6 +70,59 @@ static int dic_j2k_write_marker(FILE *file, uint16_t marker)
 {
     DIC_J2K_DEBUG_ENTER();
     return dic_j2k_write_u16_be(file, marker);
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, A.5.1, XTsiz/YTsiz define the regular tile grid over the reference grid. */
+static dic_status dic_j2k_tile_grid(
+    const dic_j2k_basic_params *params,
+    uint32_t *tiles_x,
+    uint32_t *tiles_y,
+    uint32_t *tile_count
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    uint32_t tile_width;
+    uint32_t tile_height;
+    uint64_t count;
+
+    if (params == NULL || tiles_x == NULL || tiles_y == NULL || tile_count == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    tile_width = params->tile_width == 0u ? params->width : params->tile_width;
+    tile_height = params->tile_height == 0u ? params->height : params->tile_height;
+    if (tile_width == 0u || tile_height == 0u || tile_width > params->width || tile_height > params->height)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    *tiles_x = (params->width + tile_width - 1u) / tile_width;
+    *tiles_y = (params->height + tile_height - 1u) / tile_height;
+    count = (uint64_t)(*tiles_x) * (uint64_t)(*tiles_y);
+    if (count == 0u || count > UINT16_MAX + 1u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    *tile_count = (uint32_t)count;
+    return DIC_STATUS_OK;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, A.6.1 Table A.21, this encoder only supports the explicit 15/15 maximum precinct that preserves the single-precinct packet layout. */
+static dic_status dic_j2k_validate_precincts(const dic_j2k_basic_params *params)
+{
+    DIC_J2K_DEBUG_ENTER();
+    uint8_t resolution;
+
+    if (!params->use_precincts)
+        return DIC_STATUS_OK;
+
+    for (resolution = 0u; resolution <= params->decomposition_levels; ++resolution)
+    {
+        uint8_t ppx = params->precinct_width_exponents[resolution];
+        uint8_t ppy = params->precinct_height_exponents[resolution];
+
+        if (ppx > 15u || ppy > 15u)
+            return DIC_STATUS_INVALID_ARGUMENT;
+        if (ppx != 15u || ppy != 15u)
+            return DIC_J2K_UNSUPPORTED_PRECINCT_SIZE;
+    }
+
+    return DIC_STATUS_OK;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.4.3, SOD begins the tile-part bit-stream data. */
@@ -117,17 +176,44 @@ static int dic_j2k_write_siz(FILE *file, const dic_j2k_basic_params *params)
 static int dic_j2k_write_cod(FILE *file, const dic_j2k_basic_params *params)
 {
     DIC_J2K_DEBUG_ENTER();
-    return dic_j2k_write_marker(file, DIC_J2K_MARKER_COD)
-        && dic_j2k_write_u16_be(file, 12u)
-        && dic_j2k_write_u8(file, 0u)
-        && dic_j2k_write_u8(file, 0u)
-        && dic_j2k_write_u16_be(file, params->layers == 0u ? 1u : params->layers)
-        && dic_j2k_write_u8(file, params->multiple_component_transform ? 1u : 0u)
-        && dic_j2k_write_u8(file, params->decomposition_levels)
-        && dic_j2k_write_u8(file, 4u)
-        && dic_j2k_write_u8(file, 4u)
-        && dic_j2k_write_u8(file, 0u)
-        && dic_j2k_write_u8(file, params->reversible ? 1u : 0u);
+    uint8_t scod = 0u;
+    uint16_t length = (uint16_t)(12u + (params->use_precincts ? (uint16_t)params->decomposition_levels + 1u : 0u));
+    uint8_t resolution;
+
+    if (params->use_precincts)
+        scod |= 0x01u;
+    if (params->use_sop)
+        scod |= 0x02u;
+    if (params->use_eph)
+        scod |= 0x04u;
+
+    if (!dic_j2k_write_marker(file, DIC_J2K_MARKER_COD)
+        || !dic_j2k_write_u16_be(file, length)
+        || !dic_j2k_write_u8(file, scod)
+        || !dic_j2k_write_u8(file, 0u)
+        || !dic_j2k_write_u16_be(file, params->layers == 0u ? 1u : params->layers)
+        || !dic_j2k_write_u8(file, params->multiple_component_transform ? 1u : 0u)
+        || !dic_j2k_write_u8(file, params->decomposition_levels)
+        || !dic_j2k_write_u8(file, 4u)
+        || !dic_j2k_write_u8(file, 4u)
+        || !dic_j2k_write_u8(file, 0x04u)
+        || !dic_j2k_write_u8(file, params->reversible ? 1u : 0u))
+    {
+        return 0;
+    }
+
+    for (resolution = 0u; params->use_precincts && resolution <= params->decomposition_levels; ++resolution)
+    {
+        uint8_t precinct = (uint8_t)(
+            (uint8_t)(params->precinct_height_exponents[resolution] << 4u)
+            | params->precinct_width_exponents[resolution]
+        );
+
+        if (!dic_j2k_write_u8(file, precinct))
+            return 0;
+    }
+
+    return 1;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.6.3 Tables A.24-A.26, RGN signals implicit Maxshift ROI scaling. */
@@ -233,7 +319,13 @@ static int dic_j2k_write_qcc(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.4.2 and Table A.5, Start of tile-part syntax and Psot. */
-static int dic_j2k_write_sot(FILE *file, size_t payload_size)
+static int dic_j2k_write_sot(
+    FILE *file,
+    uint16_t tile_index,
+    size_t payload_size,
+    uint8_t tile_part_index,
+    uint8_t tile_part_count
+)
 {
     DIC_J2K_DEBUG_ENTER();
     uint32_t tile_part_length;
@@ -244,10 +336,40 @@ static int dic_j2k_write_sot(FILE *file, size_t payload_size)
     tile_part_length = (uint32_t)payload_size + 14u;
     return dic_j2k_write_marker(file, DIC_J2K_MARKER_SOT)
         && dic_j2k_write_u16_be(file, 10u)
-        && dic_j2k_write_u16_be(file, 0u)
+        && dic_j2k_write_u16_be(file, tile_index)
         && dic_j2k_write_u32_be(file, tile_part_length)
-        && dic_j2k_write_u8(file, 0u)
-        && dic_j2k_write_u8(file, 1u);
+        && dic_j2k_write_u8(file, tile_part_index)
+        && dic_j2k_write_u8(file, tile_part_count);
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, A.3-A.6, main header marker segments precede every tile-part. */
+static int dic_j2k_write_main_header(FILE *file, const dic_j2k_basic_params *params)
+{
+    DIC_J2K_DEBUG_ENTER();
+    return dic_j2k_write_marker(file, DIC_J2K_MARKER_SOC)
+        && dic_j2k_write_siz(file, params)
+        && dic_j2k_write_cod(file, params)
+        && dic_j2k_write_qcd(file, params)
+        && (params->multiple_component_transform
+            ? (dic_j2k_write_qcc(file, params, 1u, 1u)
+                && dic_j2k_write_qcc(file, params, 2u, 1u))
+            : 1)
+        && dic_j2k_write_rgn(file, params);
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, A.4.2-A.4.3, a tile-part is SOT, SOD, then compressed data. */
+static int dic_j2k_write_tile_part(FILE *file, const dic_j2k_tile_part_payload *tile_part)
+{
+    DIC_J2K_DEBUG_ENTER();
+    return dic_j2k_write_sot(
+            file,
+            tile_part->tile_index,
+            tile_part->payload_size,
+            tile_part->tile_part_index,
+            tile_part->tile_part_count
+        )
+        && dic_j2k_write_marker(file, DIC_J2K_MARKER_SOD)
+        && dic_j2k_write_bytes(file, tile_part->payload, tile_part->payload_size);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.3 and Figures A.3-A.5, codestream and tile-part construction. */
@@ -257,7 +379,7 @@ dic_status dic_j2k_write_minimal_codestream(
 )
 {
     DIC_J2K_DEBUG_ENTER();
-    return dic_j2k_write_codestream_with_payload(path, params, NULL, 0u);
+    return dic_j2k_write_empty_packet_codestream(path, params);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.4.2-A.4.4, SOT/Psot, SOD data, and EOC syntax. */
@@ -269,22 +391,19 @@ dic_status dic_j2k_write_codestream_with_payload(
 )
 {
     DIC_J2K_DEBUG_ENTER();
-    FILE *file = NULL;
-    dic_status status;
+    dic_j2k_tile_part_payload tile_part;
 
     if (path == NULL || params == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (payload_size > 0u && payload == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    file = dic_j2k_open_file(path, "wb");
-    if (file == NULL)
-        return DIC_STATUS_IO_ERROR;
-
-    status = dic_j2k_write_codestream_with_payload_stream(file, params, payload, payload_size);
-    if (fclose(file) != 0 && status == DIC_STATUS_OK)
-        status = DIC_STATUS_IO_ERROR;
-    return status;
+    tile_part.tile_index = 0u;
+    tile_part.tile_part_index = 0u;
+    tile_part.tile_part_count = 1u;
+    tile_part.payload = payload;
+    tile_part.payload_size = payload_size;
+    return dic_j2k_write_codestream_with_tile_parts(path, params, &tile_part, 1u);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1, JP2 Contiguous Codestream box embeds a codestream byte stream. */
@@ -294,7 +413,7 @@ dic_status dic_j2k_write_minimal_codestream_stream(
 )
 {
     DIC_J2K_DEBUG_ENTER();
-    return dic_j2k_write_codestream_with_payload_stream(file, params, NULL, 0u);
+    return dic_j2k_write_empty_packet_codestream_stream(file, params);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.3-A.4, main header followed by one tile-part and EOC. */
@@ -306,9 +425,63 @@ dic_status dic_j2k_write_codestream_with_payload_stream(
 )
 {
     DIC_J2K_DEBUG_ENTER();
+    dic_j2k_tile_part_payload tile_part;
+
     if (file == NULL || params == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (payload_size > 0u && payload == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    tile_part.tile_index = 0u;
+    tile_part.tile_part_index = 0u;
+    tile_part.tile_part_count = 1u;
+    tile_part.payload = payload;
+    tile_part.payload_size = payload_size;
+    return dic_j2k_write_codestream_with_tile_parts_stream(file, params, &tile_part, 1u);
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, A.3-A.4, a codestream may contain multiple SOT/SOD tile-parts after the main header. */
+dic_status dic_j2k_write_codestream_with_tile_parts(
+    const char *path,
+    const dic_j2k_basic_params *params,
+    const dic_j2k_tile_part_payload *tile_parts,
+    size_t tile_part_count
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    FILE *file = NULL;
+    dic_status status;
+
+    if (path == NULL || params == NULL || tile_parts == NULL || tile_part_count == 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    file = dic_j2k_open_file(path, "wb");
+    if (file == NULL)
+        return DIC_STATUS_IO_ERROR;
+
+    status = dic_j2k_write_codestream_with_tile_parts_stream(file, params, tile_parts, tile_part_count);
+    if (fclose(file) != 0 && status == DIC_STATUS_OK)
+        status = DIC_STATUS_IO_ERROR;
+    return status;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, A.4.2 Table A.5, each SOT carries its tile index, tile-part index, and tile-part count. */
+dic_status dic_j2k_write_codestream_with_tile_parts_stream(
+    FILE *file,
+    const dic_j2k_basic_params *params,
+    const dic_j2k_tile_part_payload *tile_parts,
+    size_t tile_part_count
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    uint32_t tiles_x;
+    uint32_t tiles_y;
+    uint32_t expected_tiles;
+    size_t index;
+    uint8_t *seen_tiles = NULL;
+    dic_status status;
+
+    if (file == NULL || params == NULL || tile_parts == NULL || tile_part_count == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (params->width == 0u || params->height == 0u)
         return DIC_J2K_INVALID_DIMENSIONS;
@@ -321,26 +494,75 @@ dic_status dic_j2k_write_codestream_with_payload_stream(
     {
         return DIC_STATUS_INVALID_ARGUMENT;
     }
-    if (params->decomposition_levels > 32u)
+    if (params->decomposition_levels > DIC_J2K_MAX_DECOMPOSITION_LEVELS)
         return DIC_J2K_INVALID_LEVELS;
-    if (payload_size > UINT32_MAX - 14u)
-        return DIC_STATUS_INVALID_ARGUMENT;
+    {
+        dic_status precinct_status = dic_j2k_validate_precincts(params);
 
-    if (!dic_j2k_write_marker(file, DIC_J2K_MARKER_SOC)
-        || !dic_j2k_write_siz(file, params)
-        || !dic_j2k_write_cod(file, params)
-        || !dic_j2k_write_qcd(file, params)
-        || (params->multiple_component_transform
-            && (!dic_j2k_write_qcc(file, params, 1u, 1u)
-                || !dic_j2k_write_qcc(file, params, 2u, 1u)))
-        || !dic_j2k_write_rgn(file, params)
-        || !dic_j2k_write_sot(file, payload_size)
-        || !dic_j2k_write_marker(file, DIC_J2K_MARKER_SOD)
-        || !dic_j2k_write_bytes(file, payload, payload_size)
-        || !dic_j2k_write_marker(file, DIC_J2K_MARKER_EOC))
+        if (precinct_status != DIC_STATUS_OK)
+            return precinct_status;
+    }
+    status = dic_j2k_tile_grid(params, &tiles_x, &tiles_y, &expected_tiles);
+    if (status != DIC_STATUS_OK)
+        return status;
+    (void)tiles_x;
+    (void)tiles_y;
+
+    if (tile_part_count < expected_tiles)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    seen_tiles = (uint8_t *)calloc(expected_tiles, sizeof(seen_tiles[0]));
+    if (seen_tiles == NULL)
+        return DIC_STATUS_MEMORY_ERROR;
+
+    for (index = 0u; index < tile_part_count; ++index)
+    {
+        if (tile_parts[index].tile_index >= expected_tiles)
+        {
+            free(seen_tiles);
+            return DIC_STATUS_INVALID_ARGUMENT;
+        }
+        if (tile_parts[index].tile_part_count != 0u
+            && tile_parts[index].tile_part_index >= tile_parts[index].tile_part_count)
+        {
+            free(seen_tiles);
+            return DIC_STATUS_INVALID_ARGUMENT;
+        }
+        if (tile_parts[index].payload_size > 0u && tile_parts[index].payload == NULL)
+        {
+            free(seen_tiles);
+            return DIC_STATUS_INVALID_ARGUMENT;
+        }
+        if (tile_parts[index].payload_size > UINT32_MAX - 14u)
+        {
+            free(seen_tiles);
+            return DIC_STATUS_INVALID_ARGUMENT;
+        }
+        if (tile_parts[index].tile_part_index == 0u)
+            seen_tiles[tile_parts[index].tile_index] = 1u;
+    }
+    for (index = 0u; index < expected_tiles; ++index)
+    {
+        if (!seen_tiles[index])
+        {
+            free(seen_tiles);
+            return DIC_STATUS_INVALID_ARGUMENT;
+        }
+    }
+    free(seen_tiles);
+
+    if (!dic_j2k_write_main_header(file, params))
     {
         return DIC_STATUS_IO_ERROR;
     }
+
+    for (index = 0u; index < tile_part_count; ++index)
+    {
+        if (!dic_j2k_write_tile_part(file, tile_parts + index))
+            return DIC_STATUS_IO_ERROR;
+    }
+
+    if (!dic_j2k_write_marker(file, DIC_J2K_MARKER_EOC))
+        return DIC_STATUS_IO_ERROR;
 
     return DIC_STATUS_OK;
 }
@@ -376,12 +598,26 @@ dic_status dic_j2k_write_empty_packet_codestream_stream(
 {
     DIC_J2K_DEBUG_ENTER();
     dic_j2k_packet_header payload;
+    dic_j2k_tile_part_payload *tile_parts = NULL;
+    uint32_t tiles_x;
+    uint32_t tiles_y;
+    uint32_t tile_count;
+    uint32_t tile_index;
     dic_status status;
 
     if (file == NULL || params == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     dic_j2k_packet_header_init(&payload);
+    status = dic_j2k_tile_grid(params, &tiles_x, &tiles_y, &tile_count);
+    if (status != DIC_STATUS_OK)
+    {
+        dic_j2k_packet_header_free(&payload);
+        return status;
+    }
+    (void)tiles_x;
+    (void)tiles_y;
+
     status = dic_j2k_packet_build_empty_lrcp_payload(
         params->components,
         params->decomposition_levels,
@@ -390,13 +626,25 @@ dic_status dic_j2k_write_empty_packet_codestream_stream(
     );
     if (status == DIC_STATUS_OK)
     {
-        status = dic_j2k_write_codestream_with_payload_stream(
-            file,
-            params,
-            payload.data,
-            payload.size
-        );
+        tile_parts = (dic_j2k_tile_part_payload *)calloc(tile_count, sizeof(tile_parts[0]));
+        if (tile_parts == NULL)
+        {
+            status = DIC_STATUS_MEMORY_ERROR;
+        }
     }
+    for (tile_index = 0u; status == DIC_STATUS_OK && tile_index < tile_count; ++tile_index)
+    {
+        tile_parts[tile_index].tile_index = (uint16_t)tile_index;
+        tile_parts[tile_index].tile_part_index = 0u;
+        tile_parts[tile_index].tile_part_count = 1u;
+        tile_parts[tile_index].payload = payload.data;
+        tile_parts[tile_index].payload_size = payload.size;
+    }
+    if (status == DIC_STATUS_OK)
+    {
+        status = dic_j2k_write_codestream_with_tile_parts_stream(file, params, tile_parts, tile_count);
+    }
+    free(tile_parts);
     dic_j2k_packet_header_free(&payload);
     return status;
 }

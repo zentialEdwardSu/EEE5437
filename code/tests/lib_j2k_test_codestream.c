@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "j2k/dic_j2k_codestream.h"
+#include "j2k/dic_j2k_parse.h"
 #include "test_helpers.h"
 
 static int dic_test_read_u16_be(FILE *file, unsigned int *value)
@@ -33,12 +34,32 @@ static int dic_test_read_u32_be(FILE *file, unsigned int *value)
     return 1;
 }
 
+static void dic_test_set_max_precincts(dic_j2k_basic_params *params)
+{
+    unsigned int resolution;
+
+    params->use_precincts = 1u;
+    for (resolution = 0u; resolution <= params->decomposition_levels; ++resolution)
+    {
+        params->precinct_width_exponents[resolution] = 15u;
+        params->precinct_height_exponents[resolution] = 15u;
+    }
+}
+
 int main(void)
 {
     const char *path = "dic_minimal_test.j2k";
     const char *payload_path = "dic_payload_test.j2k";
     const char *ebcot_path = "dic_ebcot_payload_test.j2k";
+    const char *precinct_path = "dic_precinct_test.j2k";
+    const char *tile_path = "dic_tile_parts_test.j2k";
     const unsigned char payload[] = {0x11u, 0x22u, 0x33u, 0x44u, 0x55u};
+    const unsigned char tile_payloads[][2] = {
+        {0x10u, 0x11u},
+        {0x20u, 0x21u},
+        {0x30u, 0x31u},
+        {0x40u, 0x41u}
+    };
     const int32_t coefficients[] = {
         0, 4, -1, 0,
         2, 0, -7, 3,
@@ -46,6 +67,9 @@ int main(void)
         9, 0, 0, 0
     };
     dic_j2k_basic_params params = {0};
+    dic_j2k_basic_params tile_params = {0};
+    dic_j2k_tile_part_payload tile_parts[4];
+    dic_j2k_codestream_info info;
     dic_j2k_codeblock_stream stream;
     FILE *file = NULL;
     unsigned int marker;
@@ -112,7 +136,7 @@ int main(void)
             DIC_EXPECT(levels == params.decomposition_levels);
             DIC_EXPECT(codeblock_width == 4);
             DIC_EXPECT(codeblock_height == 4);
-            DIC_EXPECT(codeblock_style == 0);
+            DIC_EXPECT(codeblock_style == 4);
             DIC_EXPECT(transform == 1);
             continue;
         }
@@ -138,6 +162,7 @@ int main(void)
         else if (marker == DIC_J2K_MARKER_SOD)
         {
             saw_sod = 1;
+            DIC_EXPECT(fseek(file, (long)(params.decomposition_levels + 1u), SEEK_CUR) == 0);
             continue;
         }
 
@@ -154,6 +179,72 @@ int main(void)
 
     fclose(file);
     remove(path);
+
+    dic_test_set_max_precincts(&params);
+    DIC_EXPECT(dic_j2k_write_minimal_codestream(precinct_path, &params) == DIC_STATUS_OK);
+
+#if defined(_MSC_VER)
+    DIC_EXPECT(fopen_s(&file, precinct_path, "rb") == 0);
+#else
+    file = fopen(precinct_path, "rb");
+    DIC_EXPECT(file != NULL);
+#endif
+
+    DIC_EXPECT(dic_test_read_u16_be(file, &marker));
+    DIC_EXPECT(marker == DIC_J2K_MARKER_SOC);
+
+    while (dic_test_read_u16_be(file, &marker))
+    {
+        unsigned int length;
+
+        DIC_EXPECT(marker != DIC_J2K_MARKER_EOC);
+        DIC_EXPECT(dic_test_read_u16_be(file, &length));
+        if (marker == DIC_J2K_MARKER_COD)
+        {
+            unsigned int i;
+
+            DIC_EXPECT(length == 12u + params.decomposition_levels + 1u);
+            DIC_EXPECT(fgetc(file) == 1);
+            DIC_EXPECT(fseek(file, 9L, SEEK_CUR) == 0);
+            for (i = 0u; i <= params.decomposition_levels; ++i)
+                DIC_EXPECT(fgetc(file) == 0xff);
+            break;
+        }
+        DIC_EXPECT(fseek(file, (long)length - 2L, SEEK_CUR) == 0);
+    }
+    DIC_EXPECT(marker == DIC_J2K_MARKER_COD);
+
+    fclose(file);
+    remove(precinct_path);
+    params.precinct_width_exponents[1] = 14u;
+    DIC_EXPECT(dic_j2k_write_minimal_codestream(precinct_path, &params) == DIC_J2K_UNSUPPORTED_PRECINCT_SIZE);
+    remove(precinct_path);
+    params.use_precincts = 0u;
+
+    tile_params = params;
+    tile_params.tile_width = 32u;
+    tile_params.tile_height = 24u;
+    for (marker = 0u; marker < 4u; ++marker)
+    {
+        tile_parts[marker].tile_index = (uint16_t)marker;
+        tile_parts[marker].tile_part_index = 0u;
+        tile_parts[marker].tile_part_count = 1u;
+        tile_parts[marker].payload = tile_payloads[marker];
+        tile_parts[marker].payload_size = sizeof(tile_payloads[marker]);
+    }
+    DIC_EXPECT(dic_j2k_write_codestream_with_tile_parts(
+        tile_path,
+        &tile_params,
+        tile_parts,
+        4u
+    ) == DIC_STATUS_OK);
+    DIC_EXPECT(dic_j2k_read_codestream_info(tile_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(info.params.tile_width == tile_params.tile_width);
+    DIC_EXPECT(info.params.tile_height == tile_params.tile_height);
+    DIC_EXPECT(info.tile_part_count == 4u);
+    DIC_EXPECT(info.total_tile_part_payload_bytes == 8u);
+    DIC_EXPECT(info.last_tile_index == 3u);
+    remove(tile_path);
 
     DIC_EXPECT(dic_j2k_write_codestream_with_payload(
         payload_path,

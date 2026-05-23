@@ -829,12 +829,41 @@ dic_status dic_j2k_mq_encode_decisions_with_states(
 )
 {
     DIC_J2K_DEBUG_ENTER();
+    return dic_j2k_mq_encode_decisions_with_state_result(
+        initial_states,
+        initial_state_count,
+        contexts,
+        decisions,
+        decision_count,
+        stream,
+        NULL,
+        0u
+    );
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2, packet pass termination needs the true context states left by the MQ encoder. */
+dic_status dic_j2k_mq_encode_decisions_with_state_result(
+    const dic_j2k_mq_context_state *initial_states,
+    size_t initial_state_count,
+    const uint8_t *contexts,
+    const uint8_t *decisions,
+    size_t decision_count,
+    dic_j2k_mq_stream *stream,
+    dic_j2k_mq_context_state *final_states,
+    size_t final_state_count
+)
+{
+    DIC_J2K_DEBUG_ENTER();
     size_t index;
     dic_j2k_mq_context_state states[256];
     dic_j2k_mq_native_writer writer;
     dic_j2k_mq_native_encoder encoder;
 
     if (contexts == NULL || decisions == NULL || stream == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (final_states == NULL && final_state_count > 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (final_state_count > sizeof(states) / sizeof(states[0]))
         return DIC_STATUS_INVALID_ARGUMENT;
     if (initial_states == NULL && initial_state_count > 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -881,6 +910,8 @@ dic_status dic_j2k_mq_encode_decisions_with_states(
     stream->data = writer.data;
     stream->byte_count = dic_j2k_mq_native_writer_byte_count(&writer);
     stream->bit_count = decision_count;
+    for (index = 0u; index < final_state_count; ++index)
+        final_states[index] = states[index];
     return DIC_STATUS_OK;
 }
 

@@ -27,6 +27,7 @@ extern "C" {
     X(DIC_J2K_INVALID_LEVELS, 6003, "invalid JPEG 2000 decomposition level count") \
     X(DIC_J2K_FORMAT_ERROR, 6004, "invalid JPEG 2000 codestream or JP2 file format") \
     X(DIC_J2K_MALFORMED_ARITHMETIC_STREAM, 6005, "malformed JPEG 2000 MQ arithmetic stream") \
+    X(DIC_J2K_UNSUPPORTED_PRECINCT_SIZE, 6006, "unsupported JPEG 2000 precinct size for the single-precinct encoder") \
     X(DIC_PPM_FORMAT_ERROR, 9001, "invalid PPM file format")
 
 #define DIC_STATUS_ENUM_ENTRY(symbol, value, message) symbol = value,

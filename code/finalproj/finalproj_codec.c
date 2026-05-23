@@ -1,5 +1,6 @@
 #include "finalproj/finalproj_codec.h"
 
+#include <stdint.h>
 #include <stdio.h>
 
 #include "codec/dic_basic_codec.h"
@@ -516,6 +517,97 @@ int imageWriteJP2(
     return status == DIC_STATUS_OK;
 }
 
+/* Reference: paper/T-REC-T.800-200208.pdf, A.5 and B.10.8, JP2 may wrap a codestream with one full-image tile or multiple independently coded tiles and quality layers. */
+int imageWriteJP2Tiled(
+    const char *orgImageFileName,
+    const char *outputFileName,
+    int tileSize,
+    int layers
+)
+{
+    dic_image_u8 image = {0};
+    dic_status status;
+    int tile_width;
+    int tile_height;
+
+    if (orgImageFileName == NULL || outputFileName == NULL || tileSize < 0 || layers <= 0 || layers > 65535)
+        return 0;
+
+    status = dic_ppm_read(orgImageFileName, &image);
+    if (status != DIC_STATUS_OK)
+        return 0;
+
+    tile_width = tileSize == 0 ? image.width : tileSize;
+    tile_height = tileSize == 0 ? image.height : tileSize;
+
+    status = dic_j2k_write_image_jp2_tiled(
+        outputFileName,
+        &image,
+        FINALPROJ_LEVELS,
+        tile_width,
+        tile_height,
+        (uint16_t)layers
+    );
+    dic_image_u8_free(&image);
+    return status == DIC_STATUS_OK;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex A, Annex B.10, Annex D, Annex F, and Annex G; raw J2K codestreams decode back to project PGM/PPM images. */
+int imageReadJ2K(
+    const char *inputFileName,
+    const char *outputFileName
+)
+{
+    return imageReadJ2KLayers(inputFileName, outputFileName, 0);
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex B.12, quality-layer progression allows reconstructing a codestream prefix that ends after an LRCP layer. */
+int imageReadJ2KLayers(
+    const char *inputFileName,
+    const char *outputFileName,
+    int maxLayers
+)
+{
+    dic_image_u8 image = {0};
+    dic_status status;
+
+    if (inputFileName == NULL || outputFileName == NULL || maxLayers < 0 || maxLayers > 65535)
+        return 0;
+    status = dic_j2k_read_image_codestream_layers(inputFileName, (uint16_t)maxLayers, &image);
+    if (status == DIC_STATUS_OK)
+        status = dic_ppm_write(outputFileName, &image);
+    dic_image_u8_free(&image);
+    return status == DIC_STATUS_OK;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1; JP2 decoding locates the contiguous codestream box before applying the J2K image decoder. */
+int imageReadJP2(
+    const char *inputFileName,
+    const char *outputFileName
+)
+{
+    return imageReadJP2Layers(inputFileName, outputFileName, 0);
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex B.12 and Annex I.5.3, JP2 layer preview decodes the jp2c codestream prefix through the requested quality layer. */
+int imageReadJP2Layers(
+    const char *inputFileName,
+    const char *outputFileName,
+    int maxLayers
+)
+{
+    dic_image_u8 image = {0};
+    dic_status status;
+
+    if (inputFileName == NULL || outputFileName == NULL || maxLayers < 0 || maxLayers > 65535)
+        return 0;
+    status = dic_j2k_read_image_jp2_layers(inputFileName, (uint16_t)maxLayers, &image);
+    if (status == DIC_STATUS_OK)
+        status = dic_ppm_write(outputFileName, &image);
+    dic_image_u8_free(&image);
+    return status == DIC_STATUS_OK;
+}
+
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex A marker segments expose codestream dimensions and coding style. */
 static int finalproj_print_j2k_info(const dic_j2k_codestream_info *info)
 {
@@ -532,6 +624,8 @@ static int finalproj_print_j2k_info(const dic_j2k_codestream_info *info)
     printf("tile_height %u\n", (unsigned int)info->params.tile_height);
     printf("roi_shift %u\n", (unsigned int)info->params.roi_shift);
     printf("tile_payload_bytes %zu\n", info->tile_part_payload_bytes);
+    printf("tile_parts %u\n", (unsigned int)info->tile_part_count);
+    printf("total_tile_payload_bytes %zu\n", info->total_tile_part_payload_bytes);
     return 1;
 }
 

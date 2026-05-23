@@ -21,6 +21,9 @@ int main(void)
     dic_j2k_codeblock_stream stream;
     dic_j2k_codeblock_stream rect_stream;
     dic_j2k_codeblock_stream zero_stream;
+    size_t pass_length_sum;
+    size_t pass_decision_sum;
+    uint32_t pass;
 
     dic_j2k_codeblock_stream_init(&stream);
     dic_j2k_codeblock_stream_init(&rect_stream);
@@ -33,6 +36,21 @@ int main(void)
     DIC_EXPECT(stream.coding_passes == 19u);
     DIC_EXPECT(stream.mq.byte_count > 0u);
     DIC_EXPECT(stream.magnitude_bitplanes > 0u);
+    DIC_EXPECT(stream.pass_lengths != NULL);
+    DIC_EXPECT(stream.pass_decision_counts != NULL);
+    DIC_EXPECT(stream.pass_distortion_reductions != NULL);
+    DIC_EXPECT(stream.pass_rd_slopes != NULL);
+    pass_length_sum = 0u;
+    pass_decision_sum = 0u;
+    for (pass = 0u; pass < stream.coding_passes; ++pass)
+    {
+        pass_length_sum += stream.pass_lengths[pass];
+        pass_decision_sum += stream.pass_decision_counts[pass];
+        DIC_EXPECT(stream.pass_distortion_reductions[pass] >= 0.0);
+        DIC_EXPECT(stream.pass_rd_slopes[pass] >= 0.0);
+    }
+    DIC_EXPECT(pass_length_sum == stream.mq.byte_count);
+    DIC_EXPECT(pass_decision_sum == stream.mq.bit_count);
     DIC_EXPECT(dic_j2k_ebcot_decode_codeblock(
         &stream,
         sizeof(coefficients) / sizeof(coefficients[0]),
@@ -54,6 +72,7 @@ int main(void)
     DIC_EXPECT(rect_stream.coding_passes == 10u);
     DIC_EXPECT(rect_stream.magnitude_bitplanes > 0u);
     DIC_EXPECT(rect_stream.mq.byte_count > 0u);
+    DIC_EXPECT(rect_stream.pass_lengths != NULL);
     DIC_EXPECT(dic_j2k_ebcot_decode_codeblock_rect(
         &rect_stream,
         4u,
@@ -71,6 +90,7 @@ int main(void)
     ) == DIC_STATUS_OK);
     DIC_EXPECT(zero_stream.coding_passes == 0u);
     DIC_EXPECT(zero_stream.mq.byte_count == 0u);
+    DIC_EXPECT(zero_stream.pass_lengths == NULL);
     DIC_EXPECT(dic_j2k_ebcot_decode_codeblock(
         &zero_stream,
         sizeof(zero_coefficients) / sizeof(zero_coefficients[0]),

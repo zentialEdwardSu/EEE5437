@@ -86,6 +86,17 @@ dic_status dic_j2k_mq_encode_decisions_with_states(
     dic_j2k_mq_stream *stream
 );
 
+dic_status dic_j2k_mq_encode_decisions_with_state_result(
+    const dic_j2k_mq_context_state *initial_states,
+    size_t initial_state_count,
+    const uint8_t *contexts,
+    const uint8_t *decisions,
+    size_t decision_count,
+    dic_j2k_mq_stream *stream,
+    dic_j2k_mq_context_state *final_states,
+    size_t final_state_count
+);
+
 dic_status dic_j2k_mq_decode_decisions(
     const dic_j2k_mq_stream *stream,
     const uint8_t *contexts,

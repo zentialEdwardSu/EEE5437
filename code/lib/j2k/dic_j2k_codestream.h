@@ -20,8 +20,15 @@ enum dic_j2k_marker
     DIC_J2K_MARKER_QCD = 0xff5c,
     DIC_J2K_MARKER_QCC = 0xff5d,
     DIC_J2K_MARKER_SOT = 0xff90,
+    DIC_J2K_MARKER_SOP = 0xff91,
+    DIC_J2K_MARKER_EPH = 0xff92,
     DIC_J2K_MARKER_SOD = 0xff93,
     DIC_J2K_MARKER_EOC = 0xffd9
+};
+
+enum
+{
+    DIC_J2K_MAX_DECOMPOSITION_LEVELS = 32
 };
 
 typedef struct dic_j2k_basic_params
@@ -36,7 +43,21 @@ typedef struct dic_j2k_basic_params
     uint32_t tile_width; /**< Tile width XTsiz; zero means use the full image width as one tile. */
     uint32_t tile_height; /**< Tile height YTsiz; zero means use the full image height as one tile. */
     uint8_t roi_shift; /**< RGN MAXSHIFT scaling value; zero omits the RGN marker segment. */
+    uint8_t use_sop; /**< Non-zero sets COD Scod bit 1; packet payloads must contain SOP marker segments. */
+    uint8_t use_eph; /**< Non-zero sets COD Scod bit 2; packet payloads must contain EPH markers after each packet header. */
+    uint8_t use_precincts; /**< Non-zero sets COD Scod bit 0 and writes explicit maximum precinct bytes. */
+    uint8_t precinct_width_exponents[DIC_J2K_MAX_DECOMPOSITION_LEVELS + 1]; /**< PPx per resolution; writer currently accepts only 15. */
+    uint8_t precinct_height_exponents[DIC_J2K_MAX_DECOMPOSITION_LEVELS + 1]; /**< PPy per resolution; writer currently accepts only 15. */
 } dic_j2k_basic_params;
+
+typedef struct dic_j2k_tile_part_payload
+{
+    uint16_t tile_index; /**< Isot tile index for this tile-part. */
+    uint8_t tile_part_index; /**< TPsot tile-part index within the tile. */
+    uint8_t tile_part_count; /**< TNsot total tile-parts for this tile; zero means unknown. */
+    const uint8_t *payload; /**< Compressed tile-part bytes following SOD. */
+    size_t payload_size; /**< Number of bytes in payload. */
+} dic_j2k_tile_part_payload;
 
 dic_status dic_j2k_write_minimal_codestream(
     const char *path,
@@ -60,6 +81,20 @@ dic_status dic_j2k_write_codestream_with_payload_stream(
     const dic_j2k_basic_params *params,
     const uint8_t *payload,
     size_t payload_size
+);
+
+dic_status dic_j2k_write_codestream_with_tile_parts(
+    const char *path,
+    const dic_j2k_basic_params *params,
+    const dic_j2k_tile_part_payload *tile_parts,
+    size_t tile_part_count
+);
+
+dic_status dic_j2k_write_codestream_with_tile_parts_stream(
+    FILE *file,
+    const dic_j2k_basic_params *params,
+    const dic_j2k_tile_part_payload *tile_parts,
+    size_t tile_part_count
 );
 
 dic_status dic_j2k_write_empty_packet_codestream(

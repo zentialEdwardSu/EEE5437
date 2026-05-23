@@ -75,6 +75,39 @@ int imageWriteJP2(
     const char *outputFileName
 );
 
+int imageWriteJP2Tiled(
+    const char *orgImageFileName,
+    const char *outputFileName,
+    int tileSize,
+    int layers
+);
+
+/** Decodes a raw J2K codestream and writes the reconstructed PGM or PPM image. */
+int imageReadJ2K(
+    const char *inputFileName,
+    const char *outputFileName
+);
+
+/** Decodes the first maxLayers quality layers of a raw J2K codestream and writes PGM or PPM output. */
+int imageReadJ2KLayers(
+    const char *inputFileName,
+    const char *outputFileName,
+    int maxLayers
+);
+
+/** Decodes a JP2 file and writes the reconstructed PGM or PPM image. */
+int imageReadJP2(
+    const char *inputFileName,
+    const char *outputFileName
+);
+
+/** Decodes the first maxLayers quality layers of a JP2 file and writes PGM or PPM output. */
+int imageReadJP2Layers(
+    const char *inputFileName,
+    const char *outputFileName,
+    int maxLayers
+);
+
 int imageReadJ2KInfo(const char *inputFileName);
 int imageReadJP2Info(const char *inputFileName);
 

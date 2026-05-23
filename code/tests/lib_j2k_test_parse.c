@@ -12,6 +12,7 @@ int main(void)
     const char *jp2_path = "dic_parse_test.jp2";
     dic_j2k_basic_params params = {0};
     dic_j2k_codestream_info info;
+    unsigned int resolution;
 
     params.width = 37u;
     params.height = 29u;
@@ -23,6 +24,12 @@ int main(void)
     params.tile_width = 16u;
     params.tile_height = 16u;
     params.roi_shift = 8u;
+    params.use_precincts = 1u;
+    for (resolution = 0u; resolution <= params.decomposition_levels; ++resolution)
+    {
+        params.precinct_width_exponents[resolution] = 15u;
+        params.precinct_height_exponents[resolution] = 15u;
+    }
 
     DIC_EXPECT(dic_j2k_write_empty_packet_codestream(j2k_path, &params) == DIC_STATUS_OK);
     DIC_EXPECT(dic_j2k_read_codestream_info(j2k_path, &info) == DIC_STATUS_OK);
@@ -35,13 +42,23 @@ int main(void)
     DIC_EXPECT(info.params.tile_width == params.tile_width);
     DIC_EXPECT(info.params.tile_height == params.tile_height);
     DIC_EXPECT(info.params.roi_shift == params.roi_shift);
+    DIC_EXPECT(info.params.use_precincts == 1u);
+    for (resolution = 0u; resolution <= params.decomposition_levels; ++resolution)
+    {
+        DIC_EXPECT(info.params.precinct_width_exponents[resolution] == 15u);
+        DIC_EXPECT(info.params.precinct_height_exponents[resolution] == 15u);
+    }
     DIC_EXPECT(info.tile_part_payload_bytes == (size_t)params.layers * params.components * (params.decomposition_levels + 1u));
+    DIC_EXPECT(info.tile_part_count == 6u);
+    DIC_EXPECT(info.total_tile_part_payload_bytes == info.tile_part_payload_bytes * info.tile_part_count);
 
     DIC_EXPECT(dic_jp2_write_minimal_file(jp2_path, &params) == DIC_STATUS_OK);
     DIC_EXPECT(dic_jp2_read_codestream_info(jp2_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == params.width);
     DIC_EXPECT(info.params.height == params.height);
     DIC_EXPECT(info.params.components == params.components);
+    DIC_EXPECT(info.params.use_precincts == 1u);
+    DIC_EXPECT(info.tile_part_count == 6u);
 
     remove(j2k_path);
     remove(jp2_path);

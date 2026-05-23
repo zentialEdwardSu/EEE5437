@@ -148,6 +148,19 @@ static int dic_jp2_write_contiguous_codestream_payload_box(
         && dic_j2k_write_codestream_with_payload_stream(file, params, payload, payload_size) == DIC_STATUS_OK;
 }
 
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1, the Contiguous Codestream box may contain a complete multi-tile codestream. */
+static int dic_jp2_write_contiguous_codestream_tile_parts_box(
+    FILE *file,
+    const dic_j2k_basic_params *params,
+    const dic_j2k_tile_part_payload *tile_parts,
+    size_t tile_part_count
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    return dic_jp2_write_box_header(file, 0u, DIC_JP2_BOX_JP2C)
+        && dic_j2k_write_codestream_with_tile_parts_stream(file, params, tile_parts, tile_part_count) == DIC_STATUS_OK;
+}
+
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5, required JP2 top-level boxes and ordering. */
 dic_status dic_jp2_write_minimal_file(
     const char *path,
@@ -209,6 +222,42 @@ dic_status dic_jp2_write_file_with_codestream_payload(
         || !dic_jp2_write_file_type_box(file)
         || !dic_jp2_write_header_box(file, params)
         || !dic_jp2_write_contiguous_codestream_payload_box(file, params, payload, payload_size))
+    {
+        status = DIC_STATUS_IO_ERROR;
+    }
+
+    if (fclose(file) != 0 && status == DIC_STATUS_OK)
+        status = DIC_STATUS_IO_ERROR;
+    return status;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5, JP2 boxes wrap the same complete codestream used for raw J2K output. */
+dic_status dic_jp2_write_file_with_codestream_tile_parts(
+    const char *path,
+    const dic_j2k_basic_params *params,
+    const dic_j2k_tile_part_payload *tile_parts,
+    size_t tile_part_count
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    FILE *file = NULL;
+    dic_status status = DIC_STATUS_OK;
+
+    if (path == NULL || params == NULL || tile_parts == NULL || tile_part_count == 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (params->width == 0u || params->height == 0u)
+        return DIC_J2K_INVALID_DIMENSIONS;
+    if (params->components != 1u && params->components != 3u)
+        return DIC_J2K_INVALID_COMPONENTS;
+
+    file = dic_jp2_open_file(path, "wb");
+    if (file == NULL)
+        return DIC_STATUS_IO_ERROR;
+
+    if (!dic_jp2_write_signature_box(file)
+        || !dic_jp2_write_file_type_box(file)
+        || !dic_jp2_write_header_box(file, params)
+        || !dic_jp2_write_contiguous_codestream_tile_parts_box(file, params, tile_parts, tile_part_count))
     {
         status = DIC_STATUS_IO_ERROR;
     }

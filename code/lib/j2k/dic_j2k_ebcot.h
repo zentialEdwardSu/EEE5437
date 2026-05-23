@@ -13,6 +13,10 @@ extern "C" {
 typedef struct dic_j2k_codeblock_stream
 {
     dic_j2k_mq_stream mq; /**< MQ-coded contribution for one JPEG 2000 code-block. */
+    size_t *pass_lengths; /**< Byte length of each terminated coding-pass segment in mq.data order. */
+    size_t *pass_decision_counts; /**< Number of MQ decisions encoded in each coding-pass segment. */
+    double *pass_distortion_reductions; /**< Coefficient-domain squared-error reduction contributed by each pass. */
+    double *pass_rd_slopes; /**< Rate-distortion slope for each terminated pass, measured as distortion reduction per byte. */
     uint32_t zero_bitplanes; /**< Number of leading insignificant magnitude bit-planes. */
     uint32_t coding_passes; /**< Number of EBCOT coding passes represented in the stream. */
     uint32_t magnitude_bitplanes; /**< Number of magnitude bit-planes present before leading-zero suppression. */

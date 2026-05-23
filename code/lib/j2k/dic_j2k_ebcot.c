@@ -4,11 +4,10 @@
  *
  * The encoder and decoder build significance, refinement, cleanup, sign, run-length, and
  * uniform-context decision streams for one code-block, then pass those decisions through
- * the Annex C MQ coder. The implementation is intentionally compact: it models the core
- * coding-pass behavior used by this project and stores one aggregate code-block stream
- * containing the complete cleanup/significance-propagation/magnitude-refinement pass
- * sequence for all non-zero magnitude bit-planes. Optional termination, bypass, and
- * segmentation styles from Annex D are still fixed to the regular MQ-coded path.
+ * the Annex C MQ coder. Each coding pass is MQ-terminated independently and recorded in a
+ * pass-length table, which gives packet code real truncation points for quality-layer
+ * construction. Bypass, context reset, vertical causal, predictable termination, and
+ * segmentation symbols remain fixed to the regular MQ-coded path.
  *
  * References: dic_j2k_mq.c for Annex C MQ coding, dic_j2k_packet.c for Annex B packet
  * inclusion metadata, dic_j2k_image.c for code-block extraction, and Annex J.1/J.11 for
@@ -28,6 +27,10 @@ void dic_j2k_codeblock_stream_init(dic_j2k_codeblock_stream *stream)
     if (stream == NULL)
         return;
     dic_j2k_mq_stream_init(&stream->mq);
+    stream->pass_lengths = NULL;
+    stream->pass_decision_counts = NULL;
+    stream->pass_distortion_reductions = NULL;
+    stream->pass_rd_slopes = NULL;
     stream->zero_bitplanes = 0u;
     stream->coding_passes = 0u;
     stream->magnitude_bitplanes = 0u;
@@ -43,6 +46,10 @@ void dic_j2k_codeblock_stream_free(dic_j2k_codeblock_stream *stream)
     if (stream == NULL)
         return;
     dic_j2k_mq_stream_free(&stream->mq);
+    free(stream->pass_lengths);
+    free(stream->pass_decision_counts);
+    free(stream->pass_distortion_reductions);
+    free(stream->pass_rd_slopes);
     dic_j2k_codeblock_stream_init(stream);
 }
 
@@ -102,6 +109,23 @@ typedef struct dic_j2k_ebcot_symbols
     size_t capacity;
 } dic_j2k_ebcot_symbols;
 
+static dic_status dic_j2k_ebcot_decode_codeblock_rect_prefix(
+    const dic_j2k_codeblock_stream *stream,
+    uint32_t width,
+    uint32_t height,
+    dic_j2k_subband_orientation orientation,
+    uint32_t pass_limit,
+    int32_t *coefficients
+);
+
+static dic_status dic_j2k_ebcot_measure_pass_rd(
+    const int32_t *coefficients,
+    uint32_t width,
+    uint32_t height,
+    dic_j2k_subband_orientation orientation,
+    dic_j2k_codeblock_stream *stream
+);
+
 static void dic_j2k_ebcot_symbols_init(dic_j2k_ebcot_symbols *symbols)
 {
     DIC_J2K_DEBUG_ENTER();
@@ -117,6 +141,13 @@ static void dic_j2k_ebcot_symbols_free(dic_j2k_ebcot_symbols *symbols)
     free(symbols->contexts);
     free(symbols->decisions);
     dic_j2k_ebcot_symbols_init(symbols);
+}
+
+static void dic_j2k_ebcot_symbols_clear(dic_j2k_ebcot_symbols *symbols)
+{
+    DIC_J2K_DEBUG_ENTER();
+    if (symbols != NULL)
+        symbols->count = 0u;
 }
 
 static dic_status dic_j2k_ebcot_symbols_push(
@@ -348,16 +379,84 @@ static void dic_j2k_ebcot_initial_contexts(dic_j2k_mq_context_state *contexts)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.7 and Figure C.11, a terminal 0xFF from MQ FLUSH is discarded rather than byte-stuffed into the code-block contribution. */
-static dic_status dic_j2k_ebcot_trim_terminal_ff(dic_j2k_codeblock_stream *stream)
+static dic_status dic_j2k_ebcot_trim_terminal_ff_stream(dic_j2k_mq_stream *stream)
 {
     DIC_J2K_DEBUG_ENTER();
     if (stream == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
-    if (stream->mq.byte_count == 0u || stream->mq.data[stream->mq.byte_count - 1u] != 0xffu)
+    if (stream->byte_count == 0u || stream->data[stream->byte_count - 1u] != 0xffu)
         return DIC_STATUS_OK;
 
-    --stream->mq.byte_count;
+    --stream->byte_count;
     return DIC_STATUS_OK;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.7, pass length tables measure terminated byte segments concatenated into the code-block contribution. */
+static dic_status dic_j2k_ebcot_append_mq_segment(
+    dic_j2k_mq_stream *destination,
+    const dic_j2k_mq_stream *segment
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    uint8_t *new_data;
+
+    if (destination == NULL || segment == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (segment->byte_count == 0u)
+        return DIC_STATUS_OK;
+    if (segment->data == NULL || destination->byte_count > (size_t)-1 - segment->byte_count)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    new_data = (uint8_t *)realloc(destination->data, destination->byte_count + segment->byte_count);
+    if (new_data == NULL)
+        return DIC_STATUS_MEMORY_ERROR;
+    destination->data = new_data;
+    memcpy(destination->data + destination->byte_count, segment->data, segment->byte_count);
+    destination->byte_count += segment->byte_count;
+    destination->bit_count += segment->bit_count;
+    return DIC_STATUS_OK;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, D.3.1-D.3.4 and A.6.1 code-block style bit 2, this path terminates each coding pass and records the segment length. */
+static dic_status dic_j2k_ebcot_encode_terminated_pass(
+    dic_j2k_codeblock_stream *stream,
+    uint32_t pass_index,
+    dic_j2k_mq_context_state *contexts,
+    const dic_j2k_ebcot_symbols *symbols
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    dic_j2k_mq_stream segment;
+    dic_status status = DIC_STATUS_OK;
+
+    if (stream == NULL || contexts == NULL || symbols == NULL || pass_index >= stream->coding_passes)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    dic_j2k_mq_stream_init(&segment);
+    if (symbols->count > 0u)
+    {
+        status = dic_j2k_mq_encode_decisions_with_state_result(
+            contexts,
+            DIC_J2K_EBCOT_CONTEXT_COUNT,
+            symbols->contexts,
+            symbols->decisions,
+            symbols->count,
+            &segment,
+            contexts,
+            DIC_J2K_EBCOT_CONTEXT_COUNT
+        );
+        if (status == DIC_STATUS_OK)
+            status = dic_j2k_ebcot_trim_terminal_ff_stream(&segment);
+        if (status == DIC_STATUS_OK)
+            status = dic_j2k_ebcot_append_mq_segment(&stream->mq, &segment);
+    }
+    if (status == DIC_STATUS_OK)
+    {
+        stream->pass_lengths[pass_index] = segment.byte_count;
+        stream->pass_decision_counts[pass_index] = symbols->count;
+    }
+    dic_j2k_mq_stream_free(&segment);
+    return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex D.3.2, a newly significant coefficient is followed immediately by its sign bit. */
@@ -635,6 +734,7 @@ dic_status dic_j2k_ebcot_encode_codeblock_rect(
     size_t coefficient_count;
     uint32_t bitplanes;
     uint32_t plane;
+    uint32_t pass_index = 0u;
     dic_status status = DIC_STATUS_OK;
 
     dic_j2k_ebcot_symbols_init(&symbols);
@@ -652,15 +752,32 @@ dic_status dic_j2k_ebcot_encode_codeblock_rect(
 
     dic_j2k_codeblock_stream_free(stream);
     bitplanes = dic_j2k_required_bitplanes(coefficients, coefficient_count);
-
-    if (bitplanes != 0u)
+    stream->coding_passes = bitplanes == 0u ? 0u : dic_j2k_ebcot_pass_count_for_bitplanes(bitplanes);
+    if (stream->coding_passes > 0u)
     {
+        stream->pass_lengths = (size_t *)calloc(stream->coding_passes, sizeof(stream->pass_lengths[0]));
+        stream->pass_decision_counts = (size_t *)calloc(stream->coding_passes, sizeof(stream->pass_decision_counts[0]));
+        stream->pass_distortion_reductions = (double *)calloc(stream->coding_passes, sizeof(stream->pass_distortion_reductions[0]));
+        stream->pass_rd_slopes = (double *)calloc(stream->coding_passes, sizeof(stream->pass_rd_slopes[0]));
+        if (stream->pass_lengths == NULL
+            || stream->pass_decision_counts == NULL
+            || stream->pass_distortion_reductions == NULL
+            || stream->pass_rd_slopes == NULL)
+        {
+            status = DIC_STATUS_MEMORY_ERROR;
+        }
+    }
+
+    if (status == DIC_STATUS_OK && bitplanes != 0u)
+    {
+        dic_j2k_ebcot_initial_contexts(initial_contexts);
         for (plane = bitplanes; plane > 0u && status == DIC_STATUS_OK; --plane)
         {
             uint32_t bitplane = plane - 1u;
 
             if (plane != bitplanes)
             {
+                dic_j2k_ebcot_symbols_clear(&symbols);
                 status = dic_j2k_ebcot_encode_sigprop_pass(
                     coefficients,
                     state,
@@ -672,6 +789,15 @@ dic_status dic_j2k_ebcot_encode_codeblock_rect(
                 );
                 if (status != DIC_STATUS_OK)
                     break;
+                status = dic_j2k_ebcot_encode_terminated_pass(
+                    stream,
+                    pass_index++,
+                    initial_contexts,
+                    &symbols
+                );
+                if (status != DIC_STATUS_OK)
+                    break;
+                dic_j2k_ebcot_symbols_clear(&symbols);
                 status = dic_j2k_ebcot_encode_magref_pass(
                     coefficients,
                     state,
@@ -682,7 +808,16 @@ dic_status dic_j2k_ebcot_encode_codeblock_rect(
                 );
                 if (status != DIC_STATUS_OK)
                     break;
+                status = dic_j2k_ebcot_encode_terminated_pass(
+                    stream,
+                    pass_index++,
+                    initial_contexts,
+                    &symbols
+                );
+                if (status != DIC_STATUS_OK)
+                    break;
             }
+            dic_j2k_ebcot_symbols_clear(&symbols);
             status = dic_j2k_ebcot_encode_cleanup_pass(
                 coefficients,
                 state,
@@ -692,35 +827,37 @@ dic_status dic_j2k_ebcot_encode_codeblock_rect(
                 bitplane,
                 &symbols
             );
+            if (status != DIC_STATUS_OK)
+                break;
+            status = dic_j2k_ebcot_encode_terminated_pass(
+                stream,
+                pass_index++,
+                initial_contexts,
+                &symbols
+            );
             if (status == DIC_STATUS_OK)
                 dic_j2k_ebcot_clear_pass_flags(state, coefficient_count);
         }
-    }
-
-    if (status == DIC_STATUS_OK && symbols.count > 0u)
-    {
-        dic_j2k_ebcot_initial_contexts(initial_contexts);
-        status = dic_j2k_mq_encode_decisions_with_states(
-            initial_contexts,
-            DIC_J2K_EBCOT_CONTEXT_COUNT,
-            symbols.contexts,
-            symbols.decisions,
-            symbols.count,
-            &stream->mq
-        );
-        if (status == DIC_STATUS_OK)
-            status = dic_j2k_ebcot_trim_terminal_ff(stream);
     }
 
     if (status == DIC_STATUS_OK)
     {
         stream->magnitude_bitplanes = bitplanes;
         stream->zero_bitplanes = 0u;
-        /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.6 Table B.4, Npass is the number of coding passes contributed by this packet. */
-        stream->coding_passes = bitplanes == 0u ? 0u : dic_j2k_ebcot_pass_count_for_bitplanes(bitplanes);
         stream->width = width;
         stream->height = height;
         stream->subband_orientation = (uint8_t)orientation;
+        status = dic_j2k_ebcot_measure_pass_rd(
+            coefficients,
+            width,
+            height,
+            orientation,
+            stream
+        );
+    }
+    else
+    {
+        dic_j2k_codeblock_stream_free(stream);
     }
 
     dic_j2k_ebcot_symbols_free(&symbols);
@@ -751,6 +888,74 @@ typedef struct dic_j2k_ebcot_decoder_symbols
     dic_j2k_mq_decoder_session *session;
     dic_status status;
 } dic_j2k_ebcot_decoder_symbols;
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex D coding passes may be terminated individually; each pass then decodes from its own byte segment. */
+static dic_status dic_j2k_ebcot_decoder_begin_pass(
+    const dic_j2k_codeblock_stream *stream,
+    uint32_t pass_index,
+    size_t *byte_offset,
+    dic_j2k_mq_context_state *contexts,
+    dic_j2k_mq_decoder_session *session,
+    dic_j2k_ebcot_decoder_symbols *symbols
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    dic_j2k_mq_stream segment;
+
+    if (stream == NULL || byte_offset == NULL || contexts == NULL || session == NULL || symbols == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (stream->pass_lengths == NULL || pass_index >= stream->coding_passes)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (stream->mq.byte_count > 0u && stream->mq.data == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (*byte_offset > stream->mq.byte_count || stream->pass_lengths[pass_index] > stream->mq.byte_count - *byte_offset)
+        return DIC_J2K_MALFORMED_ARITHMETIC_STREAM;
+
+    segment.data = stream->mq.data == NULL ? NULL : (uint8_t *)(stream->mq.data + *byte_offset);
+    segment.byte_count = stream->pass_lengths[pass_index];
+    segment.bit_count = stream->pass_decision_counts == NULL
+        ? (size_t)-1
+        : stream->pass_decision_counts[pass_index];
+    symbols->session = session;
+    symbols->status = DIC_STATUS_OK;
+    return dic_j2k_mq_decoder_session_init(
+        session,
+        &segment,
+        contexts,
+        DIC_J2K_EBCOT_CONTEXT_COUNT
+    );
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex C context states persist across terminated passes unless the reset coding style is used. */
+static dic_status dic_j2k_ebcot_decoder_finish_pass(
+    const dic_j2k_codeblock_stream *stream,
+    uint32_t pass_index,
+    size_t *byte_offset,
+    dic_j2k_mq_context_state *contexts,
+    const dic_j2k_mq_decoder_session *session,
+    const dic_j2k_ebcot_decoder_symbols *symbols
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    size_t index;
+
+    if (stream == NULL || byte_offset == NULL || contexts == NULL || session == NULL || symbols == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (symbols->status != DIC_STATUS_OK)
+        return symbols->status;
+    if (pass_index >= stream->coding_passes || stream->pass_lengths == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (stream->pass_decision_counts != NULL
+        && session->decisions_decoded != stream->pass_decision_counts[pass_index])
+    {
+        return DIC_J2K_MALFORMED_ARITHMETIC_STREAM;
+    }
+
+    for (index = 0u; index < DIC_J2K_EBCOT_CONTEXT_COUNT; ++index)
+        contexts[index] = session->states[index];
+    *byte_offset += stream->pass_lengths[pass_index];
+    return DIC_STATUS_OK;
+}
 
 static uint8_t dic_j2k_ebcot_take_decision(dic_j2k_ebcot_decoder_symbols *symbols, uint8_t context)
 {
@@ -972,12 +1177,13 @@ static void dic_j2k_ebcot_decode_cleanup_pass(
     }
 }
 
-/* Reference: paper/T-REC-T.800-200208.pdf, Annex D.3 and Annex C.4, decoder reconstructs state-driven pass order from the MQ decision stream. */
-dic_status dic_j2k_ebcot_decode_codeblock_rect(
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex D.3 and Annex C.4, decoder reconstructs a prefix of the state-driven pass order for RD truncation tests. */
+static dic_status dic_j2k_ebcot_decode_codeblock_rect_prefix(
     const dic_j2k_codeblock_stream *stream,
     uint32_t width,
     uint32_t height,
     dic_j2k_subband_orientation orientation,
+    uint32_t pass_limit,
     int32_t *coefficients
 )
 {
@@ -987,10 +1193,14 @@ dic_status dic_j2k_ebcot_decode_codeblock_rect(
     dic_j2k_mq_decoder_session session;
     dic_j2k_ebcot_decoder_symbols symbols;
     size_t coefficient_count;
+    size_t byte_offset = 0u;
     uint32_t plane;
+    uint32_t pass_index = 0u;
     dic_status status;
 
     if (stream == NULL || coefficients == NULL || width == 0u || height == 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (pass_limit > stream->coding_passes)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (orientation > DIC_J2K_SUBBAND_HH)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -1007,44 +1217,29 @@ dic_status dic_j2k_ebcot_decode_codeblock_rect(
 
     memset(coefficients, 0, coefficient_count * sizeof(coefficients[0]));
     dic_j2k_ebcot_initial_contexts(initial_contexts);
-    status = dic_j2k_mq_decoder_session_init(
-        &session,
-        &stream->mq,
-        initial_contexts,
-        DIC_J2K_EBCOT_CONTEXT_COUNT
-    );
-    if (status == DIC_STATUS_OK)
+
+    if (stream->magnitude_bitplanes != 0u && pass_limit != 0u && stream->pass_lengths != NULL)
     {
-        symbols.session = &session;
-        symbols.status = DIC_STATUS_OK;
-
-        if (stream->magnitude_bitplanes != 0u && stream->coding_passes != 0u)
+        status = DIC_STATUS_OK;
+        for (plane = stream->magnitude_bitplanes; plane > 0u && status == DIC_STATUS_OK; --plane)
         {
-            for (plane = stream->magnitude_bitplanes; plane > 0u; --plane)
-            {
-                uint32_t bitplane = plane - 1u;
+            uint32_t bitplane = plane - 1u;
 
-                if (plane != stream->magnitude_bitplanes)
-                {
-                    dic_j2k_ebcot_decode_sigprop_pass(
-                        &symbols,
-                        coefficients,
-                        state,
-                        width,
-                        height,
-                        orientation,
-                        bitplane
-                    );
-                    dic_j2k_ebcot_decode_magref_pass(
-                        &symbols,
-                        coefficients,
-                        state,
-                        width,
-                        height,
-                        bitplane
-                    );
-                }
-                dic_j2k_ebcot_decode_cleanup_pass(
+            if (plane != stream->magnitude_bitplanes)
+            {
+                if (pass_index >= pass_limit)
+                    break;
+                status = dic_j2k_ebcot_decoder_begin_pass(
+                    stream,
+                    pass_index,
+                    &byte_offset,
+                    initial_contexts,
+                    &session,
+                    &symbols
+                );
+                if (status != DIC_STATUS_OK)
+                    break;
+                dic_j2k_ebcot_decode_sigprop_pass(
                     &symbols,
                     coefficients,
                     state,
@@ -1053,15 +1248,248 @@ dic_status dic_j2k_ebcot_decode_codeblock_rect(
                     orientation,
                     bitplane
                 );
-                dic_j2k_ebcot_clear_pass_flags(state, coefficient_count);
+                status = dic_j2k_ebcot_decoder_finish_pass(
+                    stream,
+                    pass_index++,
+                    &byte_offset,
+                    initial_contexts,
+                    &session,
+                    &symbols
+                );
+                if (status != DIC_STATUS_OK)
+                    break;
+
+                if (pass_index >= pass_limit)
+                    break;
+                status = dic_j2k_ebcot_decoder_begin_pass(
+                    stream,
+                    pass_index,
+                    &byte_offset,
+                    initial_contexts,
+                    &session,
+                    &symbols
+                );
+                if (status != DIC_STATUS_OK)
+                    break;
+                dic_j2k_ebcot_decode_magref_pass(
+                    &symbols,
+                    coefficients,
+                    state,
+                    width,
+                    height,
+                    bitplane
+                );
+                status = dic_j2k_ebcot_decoder_finish_pass(
+                    stream,
+                    pass_index++,
+                    &byte_offset,
+                    initial_contexts,
+                    &session,
+                    &symbols
+                );
+                if (status != DIC_STATUS_OK)
+                    break;
             }
+
+            if (pass_index >= pass_limit)
+                break;
+            status = dic_j2k_ebcot_decoder_begin_pass(
+                stream,
+                pass_index,
+                &byte_offset,
+                initial_contexts,
+                &session,
+                &symbols
+            );
+            if (status != DIC_STATUS_OK)
+                break;
+            dic_j2k_ebcot_decode_cleanup_pass(
+                &symbols,
+                coefficients,
+                state,
+                width,
+                height,
+                orientation,
+                bitplane
+            );
+            status = dic_j2k_ebcot_decoder_finish_pass(
+                stream,
+                pass_index++,
+                &byte_offset,
+                initial_contexts,
+                &session,
+                &symbols
+            );
+            if (status == DIC_STATUS_OK)
+                dic_j2k_ebcot_clear_pass_flags(state, coefficient_count);
         }
-        status = symbols.status;
-        if (status == DIC_STATUS_OK && session.decisions_decoded != stream->mq.bit_count)
+        if (status == DIC_STATUS_OK && pass_index != pass_limit)
             status = DIC_J2K_MALFORMED_ARITHMETIC_STREAM;
+        if (status == DIC_STATUS_OK && pass_limit == stream->coding_passes && byte_offset != stream->mq.byte_count)
+            status = DIC_J2K_MALFORMED_ARITHMETIC_STREAM;
+    }
+    else
+    {
+        if (pass_limit != stream->coding_passes)
+        {
+            free(state);
+            return DIC_STATUS_INVALID_ARGUMENT;
+        }
+        status = dic_j2k_mq_decoder_session_init(
+            &session,
+            &stream->mq,
+            initial_contexts,
+            DIC_J2K_EBCOT_CONTEXT_COUNT
+        );
+        if (status == DIC_STATUS_OK)
+        {
+            symbols.session = &session;
+            symbols.status = DIC_STATUS_OK;
+
+            if (stream->magnitude_bitplanes != 0u && stream->coding_passes != 0u)
+            {
+                for (plane = stream->magnitude_bitplanes; plane > 0u; --plane)
+                {
+                    uint32_t bitplane = plane - 1u;
+
+                    if (plane != stream->magnitude_bitplanes)
+                    {
+                        dic_j2k_ebcot_decode_sigprop_pass(
+                            &symbols,
+                            coefficients,
+                            state,
+                            width,
+                            height,
+                            orientation,
+                            bitplane
+                        );
+                        dic_j2k_ebcot_decode_magref_pass(
+                            &symbols,
+                            coefficients,
+                            state,
+                            width,
+                            height,
+                            bitplane
+                        );
+                    }
+                    dic_j2k_ebcot_decode_cleanup_pass(
+                        &symbols,
+                        coefficients,
+                        state,
+                        width,
+                        height,
+                        orientation,
+                        bitplane
+                    );
+                    dic_j2k_ebcot_clear_pass_flags(state, coefficient_count);
+                }
+            }
+            status = symbols.status;
+            if (status == DIC_STATUS_OK && session.decisions_decoded != stream->mq.bit_count)
+                status = DIC_J2K_MALFORMED_ARITHMETIC_STREAM;
+        }
     }
 
     free(state);
+    return status;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex D.3 and Annex C.4, public decoding consumes the full coded pass sequence. */
+dic_status dic_j2k_ebcot_decode_codeblock_rect(
+    const dic_j2k_codeblock_stream *stream,
+    uint32_t width,
+    uint32_t height,
+    dic_j2k_subband_orientation orientation,
+    int32_t *coefficients
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    if (stream == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    return dic_j2k_ebcot_decode_codeblock_rect_prefix(
+        stream,
+        width,
+        height,
+        orientation,
+        stream->coding_passes,
+        coefficients
+    );
+}
+
+static double dic_j2k_ebcot_sse(
+    const int32_t *reference,
+    const int32_t *candidate,
+    size_t coefficient_count
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    size_t index;
+    double distortion = 0.0;
+
+    for (index = 0u; index < coefficient_count; ++index)
+    {
+        double difference = (double)reference[index] - (double)candidate[index];
+        distortion += difference * difference;
+    }
+    return distortion;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex B.8, layer formation uses truncation points selected by rate-distortion slope. */
+static dic_status dic_j2k_ebcot_measure_pass_rd(
+    const int32_t *coefficients,
+    uint32_t width,
+    uint32_t height,
+    dic_j2k_subband_orientation orientation,
+    dic_j2k_codeblock_stream *stream
+)
+{
+    DIC_J2K_DEBUG_ENTER();
+    int32_t *decoded = NULL;
+    size_t coefficient_count;
+    double previous_distortion;
+    uint32_t pass;
+    dic_status status = DIC_STATUS_OK;
+
+    if (coefficients == NULL || stream == NULL || width == 0u || height == 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (stream->coding_passes == 0u)
+        return DIC_STATUS_OK;
+    if (stream->pass_distortion_reductions == NULL || stream->pass_rd_slopes == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if ((size_t)width > (size_t)-1 / height)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    coefficient_count = (size_t)width * (size_t)height;
+    decoded = (int32_t *)calloc(coefficient_count, sizeof(decoded[0]));
+    if (decoded == NULL)
+        return DIC_STATUS_MEMORY_ERROR;
+
+    previous_distortion = dic_j2k_ebcot_sse(coefficients, decoded, coefficient_count);
+    for (pass = 1u; pass <= stream->coding_passes; ++pass)
+    {
+        double distortion;
+        double reduction;
+
+        status = dic_j2k_ebcot_decode_codeblock_rect_prefix(
+            stream,
+            width,
+            height,
+            orientation,
+            pass,
+            decoded
+        );
+        if (status != DIC_STATUS_OK)
+            break;
+        distortion = dic_j2k_ebcot_sse(coefficients, decoded, coefficient_count);
+        reduction = previous_distortion > distortion ? previous_distortion - distortion : 0.0;
+        stream->pass_distortion_reductions[pass - 1u] = reduction;
+        stream->pass_rd_slopes[pass - 1u] = stream->pass_lengths[pass - 1u] == 0u
+            ? reduction
+            : reduction / (double)stream->pass_lengths[pass - 1u];
+        previous_distortion = distortion;
+    }
+
+    free(decoded);
     return status;
 }
 

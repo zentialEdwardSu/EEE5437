@@ -121,6 +121,8 @@ static dic_status dic_j2k_parse_cod(FILE *file, uint16_t length, dic_j2k_codestr
     uint8_t levels;
     uint8_t ignored;
     uint8_t transform;
+    uint8_t resolution;
+    uint16_t expected_length;
 
     if (length < 12u)
         return DIC_J2K_FORMAT_ERROR;
@@ -136,12 +138,30 @@ static dic_status dic_j2k_parse_cod(FILE *file, uint16_t length, dic_j2k_codestr
     {
         return DIC_STATUS_FILE_READ_ERROR;
     }
-    (void)scod;
     (void)progression;
     info->params.layers = layers;
     info->params.multiple_component_transform = mct;
     info->params.decomposition_levels = levels;
     info->params.reversible = transform == 1u ? 1u : 0u;
+    info->params.use_sop = (uint8_t)((scod & 0x02u) != 0u);
+    info->params.use_eph = (uint8_t)((scod & 0x04u) != 0u);
+    info->params.use_precincts = (uint8_t)((scod & 0x01u) != 0u);
+
+    if (levels > DIC_J2K_MAX_DECOMPOSITION_LEVELS)
+        return DIC_J2K_FORMAT_ERROR;
+    expected_length = (uint16_t)(12u + (info->params.use_precincts ? (uint16_t)levels + 1u : 0u));
+    if (length != expected_length)
+        return DIC_J2K_FORMAT_ERROR;
+
+    for (resolution = 0u; info->params.use_precincts && resolution <= levels; ++resolution)
+    {
+        uint8_t precinct;
+
+        if (!dic_j2k_read_u8(file, &precinct))
+            return DIC_STATUS_FILE_READ_ERROR;
+        info->params.precinct_width_exponents[resolution] = (uint8_t)(precinct & 0x0fu);
+        info->params.precinct_height_exponents[resolution] = (uint8_t)(precinct >> 4);
+    }
     return DIC_STATUS_OK;
 }
 
@@ -186,10 +206,12 @@ static dic_status dic_j2k_parse_sot(FILE *file, uint16_t length, dic_j2k_codestr
     {
         return DIC_STATUS_FILE_READ_ERROR;
     }
-    (void)isot;
+    info->last_tile_index = isot;
     (void)tpsot;
     (void)tnsot;
     info->tile_part_payload_bytes = psot >= 14u ? (size_t)psot - 14u : 0u;
+    info->total_tile_part_payload_bytes += info->tile_part_payload_bytes;
+    ++info->tile_part_count;
     return DIC_STATUS_OK;
 }
 

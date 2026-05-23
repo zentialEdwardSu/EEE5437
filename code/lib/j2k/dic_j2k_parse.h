@@ -11,7 +11,10 @@ extern "C" {
 typedef struct dic_j2k_codestream_info
 {
     dic_j2k_basic_params params; /**< Parsed SIZ/COD/RGN parameters from the codestream. */
-    size_t tile_part_payload_bytes; /**< Number of compressed tile-part payload bytes after SOD. */
+    size_t tile_part_payload_bytes; /**< Number of compressed bytes after the most recent parsed SOD. */
+    size_t total_tile_part_payload_bytes; /**< Sum of compressed tile-part payload bytes after all parsed SOD markers. */
+    uint32_t tile_part_count; /**< Number of SOT/SOD tile-parts found in the codestream. */
+    uint16_t last_tile_index; /**< Isot value from the most recent parsed SOT marker segment. */
 } dic_j2k_codestream_info;
 
 dic_status dic_j2k_read_codestream_info(
