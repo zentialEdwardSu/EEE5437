@@ -10,13 +10,13 @@
 extern "C" {
 #endif
 
-dic_status dic_j2k_write_image_codestream(
+dic_status j2k_write_image_codestream(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels
 );
 
-dic_status dic_j2k_write_image_codestream_tiled(
+dic_status j2k_write_image_codestream_tiled(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels,
@@ -26,7 +26,7 @@ dic_status dic_j2k_write_image_codestream_tiled(
 );
 
 /** Encodes a raw J2K codestream with RGN Maxshift applied to coefficients covered by the rectangular ROI. */
-dic_status dic_j2k_write_image_codestream_roi(
+dic_status j2k_write_image_codestream_roi(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels,
@@ -34,13 +34,13 @@ dic_status dic_j2k_write_image_codestream_roi(
     uint8_t roi_shift
 );
 
-dic_status dic_j2k_write_image_jp2(
+dic_status j2k_write_image_jp2(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels
 );
 
-dic_status dic_j2k_write_image_jp2_tiled(
+dic_status j2k_write_image_jp2_tiled(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels,
@@ -50,7 +50,7 @@ dic_status dic_j2k_write_image_jp2_tiled(
 );
 
 /** Encodes a JP2 file with RGN Maxshift applied to coefficients covered by the rectangular ROI. */
-dic_status dic_j2k_write_image_jp2_roi(
+dic_status j2k_write_image_jp2_roi(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels,
@@ -59,7 +59,7 @@ dic_status dic_j2k_write_image_jp2_roi(
 );
 
 /** Decodes the supported reversible JPEG 2000 codestream subset into an owned 8-bit image. */
-dic_status dic_j2k_read_image_codestream(
+dic_status j2k_read_image_codestream(
     const char *path,
     dic_image_u8 *image
 );
@@ -71,14 +71,14 @@ dic_status dic_j2k_read_image_codestream(
  * less than or equal to the signalled layer count and reconstruct the image from the packet
  * prefix ending after that quality layer.
  */
-dic_status dic_j2k_read_image_codestream_layers(
+dic_status j2k_read_image_codestream_layers(
     const char *path,
     uint16_t max_layers,
     dic_image_u8 *image
 );
 
 /** Decodes a JP2 file by locating its contiguous codestream box and reconstructing an owned 8-bit image. */
-dic_status dic_j2k_read_image_jp2(
+dic_status j2k_read_image_jp2(
     const char *path,
     dic_image_u8 *image
 );
@@ -90,7 +90,7 @@ dic_status dic_j2k_read_image_jp2(
  * less than or equal to the signalled layer count and reconstruct the image from the packet
  * prefix ending after that quality layer.
  */
-dic_status dic_j2k_read_image_jp2_layers(
+dic_status j2k_read_image_jp2_layers(
     const char *path,
     uint16_t max_layers,
     dic_image_u8 *image

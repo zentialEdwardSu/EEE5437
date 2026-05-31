@@ -1,7 +1,7 @@
 #include <stdio.h>
 
-#include "j2k/dic_j2k_codestream.h"
-#include "j2k/dic_j2k_parse.h"
+#include "j2k/j2k_codestream.h"
+#include "j2k/j2k_parse.h"
 #include "test_helpers.h"
 
 static int dic_test_read_u16_be(FILE *file, unsigned int *value)
@@ -34,7 +34,7 @@ static int dic_test_read_u32_be(FILE *file, unsigned int *value)
     return 1;
 }
 
-static void dic_test_set_max_precincts(dic_j2k_basic_params *params)
+static void dic_test_set_max_precincts(j2k_basic_params *params)
 {
     unsigned int resolution;
 
@@ -66,11 +66,11 @@ int main(void)
         0, 0, 1, -2,
         9, 0, 0, 0
     };
-    dic_j2k_basic_params params = {0};
-    dic_j2k_basic_params tile_params = {0};
-    dic_j2k_tile_part_payload tile_parts[4];
-    dic_j2k_codestream_info info;
-    dic_j2k_codeblock_stream stream;
+    j2k_basic_params params = {0};
+    j2k_basic_params tile_params = {0};
+    j2k_tile_part_payload tile_parts[4];
+    j2k_codestream_info info;
+    j2k_codeblock_stream stream;
     FILE *file = NULL;
     unsigned int marker;
     int saw_siz = 0;
@@ -79,7 +79,7 @@ int main(void)
     int saw_sot = 0;
     int saw_sod = 0;
 
-    dic_j2k_codeblock_stream_init(&stream);
+    j2k_codeblock_stream_init(&stream);
     params.width = 64u;
     params.height = 48u;
     params.components = 1u;
@@ -87,7 +87,7 @@ int main(void)
     params.reversible = 1u;
     params.multiple_component_transform = 0u;
 
-    DIC_EXPECT(dic_j2k_write_minimal_codestream(path, &params) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_minimal_codestream(path, &params) == DIC_STATUS_OK);
 
 #if defined(_MSC_VER)
     DIC_EXPECT(fopen_s(&file, path, "rb") == 0);
@@ -97,17 +97,17 @@ int main(void)
 #endif
 
     DIC_EXPECT(dic_test_read_u16_be(file, &marker));
-    DIC_EXPECT(marker == DIC_J2K_MARKER_SOC);
+    DIC_EXPECT(marker == j2k_MARKER_SOC);
 
     while (dic_test_read_u16_be(file, &marker))
     {
         unsigned int length;
 
-        if (marker == DIC_J2K_MARKER_EOC)
+        if (marker == j2k_MARKER_EOC)
             break;
-        if (marker == DIC_J2K_MARKER_SIZ)
+        if (marker == j2k_MARKER_SIZ)
             saw_siz = 1;
-        else if (marker == DIC_J2K_MARKER_COD)
+        else if (marker == j2k_MARKER_COD)
         {
             int scod;
             unsigned int layers;
@@ -140,7 +140,7 @@ int main(void)
             DIC_EXPECT(transform == 1);
             continue;
         }
-        else if (marker == DIC_J2K_MARKER_QCD)
+        else if (marker == j2k_MARKER_QCD)
         {
             unsigned int expected_length = 4u + 3u * params.decomposition_levels;
             unsigned int i;
@@ -157,9 +157,9 @@ int main(void)
                 DIC_EXPECT(fgetc(file) == expected_high_steps[i % 3u]);
             continue;
         }
-        else if (marker == DIC_J2K_MARKER_SOT)
+        else if (marker == j2k_MARKER_SOT)
             saw_sot = 1;
-        else if (marker == DIC_J2K_MARKER_SOD)
+        else if (marker == j2k_MARKER_SOD)
         {
             saw_sod = 1;
             DIC_EXPECT(fseek(file, (long)(params.decomposition_levels + 1u), SEEK_CUR) == 0);
@@ -170,7 +170,7 @@ int main(void)
         DIC_EXPECT(fseek(file, (long)length - 2L, SEEK_CUR) == 0);
     }
 
-    DIC_EXPECT(marker == DIC_J2K_MARKER_EOC);
+    DIC_EXPECT(marker == j2k_MARKER_EOC);
     DIC_EXPECT(saw_siz);
     DIC_EXPECT(saw_cod);
     DIC_EXPECT(saw_qcd);
@@ -181,7 +181,7 @@ int main(void)
     remove(path);
 
     dic_test_set_max_precincts(&params);
-    DIC_EXPECT(dic_j2k_write_minimal_codestream(precinct_path, &params) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_minimal_codestream(precinct_path, &params) == DIC_STATUS_OK);
 
 #if defined(_MSC_VER)
     DIC_EXPECT(fopen_s(&file, precinct_path, "rb") == 0);
@@ -191,15 +191,15 @@ int main(void)
 #endif
 
     DIC_EXPECT(dic_test_read_u16_be(file, &marker));
-    DIC_EXPECT(marker == DIC_J2K_MARKER_SOC);
+    DIC_EXPECT(marker == j2k_MARKER_SOC);
 
     while (dic_test_read_u16_be(file, &marker))
     {
         unsigned int length;
 
-        DIC_EXPECT(marker != DIC_J2K_MARKER_EOC);
+        DIC_EXPECT(marker != j2k_MARKER_EOC);
         DIC_EXPECT(dic_test_read_u16_be(file, &length));
-        if (marker == DIC_J2K_MARKER_COD)
+        if (marker == j2k_MARKER_COD)
         {
             unsigned int i;
 
@@ -212,12 +212,12 @@ int main(void)
         }
         DIC_EXPECT(fseek(file, (long)length - 2L, SEEK_CUR) == 0);
     }
-    DIC_EXPECT(marker == DIC_J2K_MARKER_COD);
+    DIC_EXPECT(marker == j2k_MARKER_COD);
 
     fclose(file);
     remove(precinct_path);
     params.precinct_width_exponents[1] = 14u;
-    DIC_EXPECT(dic_j2k_write_minimal_codestream(precinct_path, &params) == DIC_J2K_UNSUPPORTED_PRECINCT_SIZE);
+    DIC_EXPECT(j2k_write_minimal_codestream(precinct_path, &params) == DIC_J2K_UNSUPPORTED_PRECINCT_SIZE);
     remove(precinct_path);
     params.use_precincts = 0u;
 
@@ -232,13 +232,13 @@ int main(void)
         tile_parts[marker].payload = tile_payloads[marker];
         tile_parts[marker].payload_size = sizeof(tile_payloads[marker]);
     }
-    DIC_EXPECT(dic_j2k_write_codestream_with_tile_parts(
+    DIC_EXPECT(j2k_write_codestream_with_tile_parts(
         tile_path,
         &tile_params,
         tile_parts,
         4u
     ) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_j2k_read_codestream_info(tile_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_codestream_info(tile_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.tile_width == tile_params.tile_width);
     DIC_EXPECT(info.params.tile_height == tile_params.tile_height);
     DIC_EXPECT(info.tile_part_count == 4u);
@@ -246,7 +246,7 @@ int main(void)
     DIC_EXPECT(info.last_tile_index == 3u);
     remove(tile_path);
 
-    DIC_EXPECT(dic_j2k_write_codestream_with_payload(
+    DIC_EXPECT(j2k_write_codestream_with_payload(
         payload_path,
         &params,
         payload,
@@ -261,20 +261,20 @@ int main(void)
 #endif
 
     DIC_EXPECT(dic_test_read_u16_be(file, &marker));
-    DIC_EXPECT(marker == DIC_J2K_MARKER_SOC);
+    DIC_EXPECT(marker == j2k_MARKER_SOC);
 
     while (dic_test_read_u16_be(file, &marker))
     {
         unsigned int length;
 
-        if (marker == DIC_J2K_MARKER_SOT)
+        if (marker == j2k_MARKER_SOT)
             break;
 
         DIC_EXPECT(dic_test_read_u16_be(file, &length));
         DIC_EXPECT(fseek(file, (long)length - 2L, SEEK_CUR) == 0);
     }
 
-    DIC_EXPECT(marker == DIC_J2K_MARKER_SOT);
+    DIC_EXPECT(marker == j2k_MARKER_SOT);
     {
         unsigned int length;
         unsigned int tile_index;
@@ -295,24 +295,24 @@ int main(void)
         DIC_EXPECT(tnsot == 1);
 
         DIC_EXPECT(dic_test_read_u16_be(file, &marker));
-        DIC_EXPECT(marker == DIC_J2K_MARKER_SOD);
+        DIC_EXPECT(marker == j2k_MARKER_SOD);
         for (i = 0u; i < sizeof(payload); ++i)
             DIC_EXPECT(fgetc(file) == payload[i]);
         DIC_EXPECT(dic_test_read_u16_be(file, &marker));
-        DIC_EXPECT(marker == DIC_J2K_MARKER_EOC);
+        DIC_EXPECT(marker == j2k_MARKER_EOC);
     }
 
     fclose(file);
     remove(payload_path);
 
-    DIC_EXPECT(dic_j2k_ebcot_encode_codeblock_rect(
+    DIC_EXPECT(j2k_ebcot_encode_codeblock_rect(
         coefficients,
         4u,
         4u,
-        DIC_J2K_SUBBAND_LL_LH,
+        j2k_SUBBAND_LL_LH,
         &stream
     ) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_j2k_write_ebcot_packet_codestream(
+    DIC_EXPECT(j2k_write_ebcot_packet_codestream(
         ebcot_path,
         &params,
         &stream,
@@ -330,15 +330,15 @@ int main(void)
     {
         unsigned int length;
 
-        if (marker == DIC_J2K_MARKER_SOT)
+        if (marker == j2k_MARKER_SOT)
             break;
 
-        if (marker == DIC_J2K_MARKER_SOC)
+        if (marker == j2k_MARKER_SOC)
             continue;
         DIC_EXPECT(dic_test_read_u16_be(file, &length));
         DIC_EXPECT(fseek(file, (long)length - 2L, SEEK_CUR) == 0);
     }
-    DIC_EXPECT(marker == DIC_J2K_MARKER_SOT);
+    DIC_EXPECT(marker == j2k_MARKER_SOT);
     {
         unsigned int length;
         unsigned int tile_index;
@@ -354,6 +354,6 @@ int main(void)
 
     fclose(file);
     remove(ebcot_path);
-    dic_j2k_codeblock_stream_free(&stream);
+    j2k_codeblock_stream_free(&stream);
     return 0;
 }

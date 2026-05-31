@@ -1,5 +1,5 @@
 /**
- * @file dic_j2k_layout.c
+ * @file j2k_layout.c
  * @brief Implements JPEG 2000 sub-band and code-block layout helpers from T.800 Annex B.
  *
  * The helpers compute resolution-level sub-band rectangles, code-block grids, individual
@@ -7,46 +7,46 @@
  * expose the sub-band code-block windows that packet construction uses when a resolution is
  * split into multiple packet positions.
  *
- * References: dic_subband.h for project sub-band rectangles, dic_j2k_packet.c for packet
- * ordering users, dic_j2k_image.c for encoder layout, and Annex J examples that show
+ * References: dic_subband.h for project sub-band rectangles, j2k_packet.c for packet
+ * ordering users, j2k_image.c for encoder layout, and Annex J examples that show
  * sub-band/code-block decoding steps.
  */
 
-#include "j2k/dic_j2k_layout.h"
-#include "j2k/dic_j2k_debug.h"
+#include "j2k/j2k_layout.h"
+#include "j2k/j2k_debug.h"
 
 #include <stdint.h>
 
-static int dic_j2k_floor_to_multiple(int value, int step)
+static int j2k_floor_to_multiple(int value, int step)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (value >= 0)
         return (value / step) * step;
     return -(((-value + step - 1) / step) * step);
 }
 
-static int dic_j2k_ceil_to_multiple(int value, int step)
+static int j2k_ceil_to_multiple(int value, int step)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (value >= 0)
         return ((value + step - 1) / step) * step;
     return -((-value / step) * step);
 }
 
-static int dic_j2k_ceil_div_positive(int value, int divisor)
+static int j2k_ceil_div_positive(int value, int divisor)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     return (value + divisor - 1) / divisor;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.2-B.6, tile-components are partitioned into resolution/sub-band regions. */
-dic_status dic_j2k_resolution_subband_count(
+dic_status j2k_resolution_subband_count(
     int levels,
     int resolution,
     int *count
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (count == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (levels < 0 || resolution < 0 || resolution > levels)
@@ -57,7 +57,7 @@ dic_status dic_j2k_resolution_subband_count(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.7, code-block dimensions partition each sub-band. */
-dic_status dic_j2k_codeblock_grid_for_subband(
+dic_status j2k_codeblock_grid_for_subband(
     int width,
     int height,
     int levels,
@@ -65,10 +65,10 @@ dic_status dic_j2k_codeblock_grid_for_subband(
     dic_subband_orientation orientation,
     int codeblock_width,
     int codeblock_height,
-    dic_j2k_codeblock_grid *grid
+    j2k_codeblock_grid *grid
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     dic_status status;
     int level;
 
@@ -95,14 +95,14 @@ dic_status dic_j2k_codeblock_grid_for_subband(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.7, edge code-blocks are clipped to the sub-band boundary. */
-dic_status dic_j2k_codeblock_rect(
-    const dic_j2k_codeblock_grid *grid,
+dic_status j2k_codeblock_rect(
+    const j2k_codeblock_grid *grid,
     int block_x,
     int block_y,
     dic_rect_i32 *rect
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int x0;
     int y0;
     int x1;
@@ -130,15 +130,15 @@ dic_status dic_j2k_codeblock_rect(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.6, precincts are resolution-grid partitions projected onto sub-bands. */
-dic_status dic_j2k_precinct_grid_for_subband(
-    const dic_j2k_codeblock_grid *codeblock_grid,
+dic_status j2k_precinct_grid_for_subband(
+    const j2k_codeblock_grid *codeblock_grid,
     int resolution,
     uint8_t precinct_width_exponent,
     uint8_t precinct_height_exponent,
-    dic_j2k_precinct_grid *precinct_grid
+    j2k_precinct_grid *precinct_grid
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int divisor;
     int right;
     int bottom;
@@ -167,20 +167,20 @@ dic_status dic_j2k_precinct_grid_for_subband(
 
     right = codeblock_grid->subband.x + codeblock_grid->subband.width;
     bottom = codeblock_grid->subband.y + codeblock_grid->subband.height;
-    precinct_grid->precinct_origin_x = dic_j2k_floor_to_multiple(
+    precinct_grid->precinct_origin_x = j2k_floor_to_multiple(
         codeblock_grid->subband.x,
         precinct_grid->precinct_width
     );
-    precinct_grid->precinct_origin_y = dic_j2k_floor_to_multiple(
+    precinct_grid->precinct_origin_y = j2k_floor_to_multiple(
         codeblock_grid->subband.y,
         precinct_grid->precinct_height
     );
     precinct_grid->precincts_x = (
-        dic_j2k_ceil_to_multiple(right, precinct_grid->precinct_width)
+        j2k_ceil_to_multiple(right, precinct_grid->precinct_width)
         - precinct_grid->precinct_origin_x
     ) / precinct_grid->precinct_width;
     precinct_grid->precincts_y = (
-        dic_j2k_ceil_to_multiple(bottom, precinct_grid->precinct_height)
+        j2k_ceil_to_multiple(bottom, precinct_grid->precinct_height)
         - precinct_grid->precinct_origin_y
     ) / precinct_grid->precinct_height;
     precinct_grid->precinct_count = (size_t)precinct_grid->precincts_x * (size_t)precinct_grid->precincts_y;
@@ -188,8 +188,8 @@ dic_status dic_j2k_precinct_grid_for_subband(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.7-B.10, each packet position contains the code-blocks intersecting its precinct. */
-dic_status dic_j2k_precinct_codeblock_window(
-    const dic_j2k_precinct_grid *precinct_grid,
+dic_status j2k_precinct_codeblock_window(
+    const j2k_precinct_grid *precinct_grid,
     int precinct_x,
     int precinct_y,
     int *first_block_x,
@@ -198,7 +198,7 @@ dic_status dic_j2k_precinct_codeblock_window(
     int *blocks_y
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int precinct_left;
     int precinct_top;
     int start_x;
@@ -236,11 +236,11 @@ dic_status dic_j2k_precinct_codeblock_window(
 
     first_x = (start_x - precinct_grid->subband.x) / precinct_grid->codeblock_width;
     first_y = (start_y - precinct_grid->subband.y) / precinct_grid->codeblock_height;
-    end_block_x = dic_j2k_ceil_div_positive(
+    end_block_x = j2k_ceil_div_positive(
         end_x - precinct_grid->subband.x,
         precinct_grid->codeblock_width
     );
-    end_block_y = dic_j2k_ceil_div_positive(
+    end_block_y = j2k_ceil_div_positive(
         end_y - precinct_grid->subband.y,
         precinct_grid->codeblock_height
     );
@@ -257,14 +257,14 @@ dic_status dic_j2k_precinct_codeblock_window(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Table A.16 and B.10.8, LRCP emits layer-resolution-component-position packets. */
-dic_status dic_j2k_packet_count_lrcp(
+dic_status j2k_packet_count_lrcp(
     int components,
     int levels,
     int layers,
     size_t *packet_count
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint64_t count;
 
     if (packet_count == NULL || components <= 0 || layers <= 0)

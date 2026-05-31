@@ -1,7 +1,7 @@
 #include <stdio.h>
 
-#include "j2k/dic_j2k_codestream.h"
-#include "j2k/dic_jp2_file.h"
+#include "j2k/j2k_codestream.h"
+#include "j2k/jp2_file.h"
 #include "test_helpers.h"
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.4, JP2 boxes start with length and type fields. */
@@ -39,7 +39,7 @@ static int dic_test_read_u16_be(FILE *file, unsigned int *value)
 int main(void)
 {
     const char *path = "dic_minimal_test.jp2";
-    dic_j2k_basic_params params = {0};
+    j2k_basic_params params = {0};
     FILE *file = NULL;
     unsigned int length;
     unsigned int type;
@@ -53,7 +53,7 @@ int main(void)
     params.reversible = 1u;
     params.multiple_component_transform = 1u;
 
-    DIC_EXPECT(dic_jp2_write_minimal_file(path, &params) == DIC_STATUS_OK);
+    DIC_EXPECT(jp2_write_minimal_file(path, &params) == DIC_STATUS_OK);
 
 #if defined(_MSC_VER)
     DIC_EXPECT(fopen_s(&file, path, "rb") == 0);
@@ -65,29 +65,29 @@ int main(void)
     DIC_EXPECT(dic_test_read_u32_be(file, &length));
     DIC_EXPECT(dic_test_read_u32_be(file, &type));
     DIC_EXPECT(length == 12u);
-    DIC_EXPECT(type == DIC_JP2_BOX_JP);
+    DIC_EXPECT(type == jp2_BOX_JP);
     DIC_EXPECT(dic_test_read_u32_be(file, &signature));
     DIC_EXPECT(signature == 0x0d0a870au);
 
     DIC_EXPECT(dic_test_read_u32_be(file, &length));
     DIC_EXPECT(dic_test_read_u32_be(file, &type));
     DIC_EXPECT(length == 20u);
-    DIC_EXPECT(type == DIC_JP2_BOX_FTYP);
+    DIC_EXPECT(type == jp2_BOX_FTYP);
     DIC_EXPECT(fseek(file, 12L, SEEK_CUR) == 0);
 
     DIC_EXPECT(dic_test_read_u32_be(file, &length));
     DIC_EXPECT(dic_test_read_u32_be(file, &type));
     DIC_EXPECT(length == 45u);
-    DIC_EXPECT(type == DIC_JP2_BOX_JP2H);
+    DIC_EXPECT(type == jp2_BOX_JP2H);
     DIC_EXPECT(fseek(file, 37L, SEEK_CUR) == 0);
 
     DIC_EXPECT(dic_test_read_u32_be(file, &length));
     DIC_EXPECT(dic_test_read_u32_be(file, &type));
     DIC_EXPECT(length == 0u);
-    DIC_EXPECT(type == DIC_JP2_BOX_JP2C);
+    DIC_EXPECT(type == jp2_BOX_JP2C);
 
     DIC_EXPECT(dic_test_read_u16_be(file, &marker));
-    DIC_EXPECT(marker == DIC_J2K_MARKER_SOC);
+    DIC_EXPECT(marker == j2k_MARKER_SOC);
 
     fclose(file);
     remove(path);

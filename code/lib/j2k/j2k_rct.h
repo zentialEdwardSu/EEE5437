@@ -9,12 +9,12 @@
 extern "C" {
 #endif
 
-dic_status dic_j2k_rct_forward(
+dic_status j2k_rct_forward(
     int32_t *samples,
     size_t pixel_count
 );
 
-dic_status dic_j2k_rct_inverse(
+dic_status j2k_rct_inverse(
     int32_t *samples,
     size_t pixel_count
 );

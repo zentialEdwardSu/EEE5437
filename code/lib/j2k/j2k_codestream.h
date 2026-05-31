@@ -5,33 +5,33 @@
 #include <stddef.h>
 
 #include "errors/errors.h"
-#include "j2k/dic_j2k_ebcot.h"
+#include "j2k/j2k_ebcot.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-enum dic_j2k_marker
+enum j2k_marker
 {
-    DIC_J2K_MARKER_SOC = 0xff4f,
-    DIC_J2K_MARKER_SIZ = 0xff51,
-    DIC_J2K_MARKER_COD = 0xff52,
-    DIC_J2K_MARKER_RGN = 0xff5e,
-    DIC_J2K_MARKER_QCD = 0xff5c,
-    DIC_J2K_MARKER_QCC = 0xff5d,
-    DIC_J2K_MARKER_SOT = 0xff90,
-    DIC_J2K_MARKER_SOP = 0xff91,
-    DIC_J2K_MARKER_EPH = 0xff92,
-    DIC_J2K_MARKER_SOD = 0xff93,
-    DIC_J2K_MARKER_EOC = 0xffd9
+    j2k_MARKER_SOC = 0xff4f,
+    j2k_MARKER_SIZ = 0xff51,
+    j2k_MARKER_COD = 0xff52,
+    j2k_MARKER_RGN = 0xff5e,
+    j2k_MARKER_QCD = 0xff5c,
+    j2k_MARKER_QCC = 0xff5d,
+    j2k_MARKER_SOT = 0xff90,
+    j2k_MARKER_SOP = 0xff91,
+    j2k_MARKER_EPH = 0xff92,
+    j2k_MARKER_SOD = 0xff93,
+    j2k_MARKER_EOC = 0xffd9
 };
 
 enum
 {
-    DIC_J2K_MAX_DECOMPOSITION_LEVELS = 32
+    j2k_MAX_DECOMPOSITION_LEVELS = 32
 };
 
-typedef struct dic_j2k_basic_params
+typedef struct j2k_basic_params
 {
     uint32_t width; /**< Reference-grid image width signalled as Xsiz in the SIZ marker. */
     uint32_t height; /**< Reference-grid image height signalled as Ysiz in the SIZ marker. */
@@ -46,78 +46,78 @@ typedef struct dic_j2k_basic_params
     uint8_t use_sop; /**< Non-zero sets COD Scod bit 1; packet payloads must contain SOP marker segments. */
     uint8_t use_eph; /**< Non-zero sets COD Scod bit 2; packet payloads must contain EPH markers after each packet header. */
     uint8_t use_precincts; /**< Non-zero sets COD Scod bit 0 and writes explicit maximum precinct bytes. */
-    uint8_t precinct_width_exponents[DIC_J2K_MAX_DECOMPOSITION_LEVELS + 1]; /**< PPx per resolution; writer currently accepts only 15. */
-    uint8_t precinct_height_exponents[DIC_J2K_MAX_DECOMPOSITION_LEVELS + 1]; /**< PPy per resolution; writer currently accepts only 15. */
-} dic_j2k_basic_params;
+    uint8_t precinct_width_exponents[j2k_MAX_DECOMPOSITION_LEVELS + 1]; /**< PPx per resolution; writer currently accepts only 15. */
+    uint8_t precinct_height_exponents[j2k_MAX_DECOMPOSITION_LEVELS + 1]; /**< PPy per resolution; writer currently accepts only 15. */
+} j2k_basic_params;
 
-typedef struct dic_j2k_tile_part_payload
+typedef struct j2k_tile_part_payload
 {
     uint16_t tile_index; /**< Isot tile index for this tile-part. */
     uint8_t tile_part_index; /**< TPsot tile-part index within the tile. */
     uint8_t tile_part_count; /**< TNsot total tile-parts for this tile; zero means unknown. */
     const uint8_t *payload; /**< Compressed tile-part bytes following SOD. */
     size_t payload_size; /**< Number of bytes in payload. */
-} dic_j2k_tile_part_payload;
+} j2k_tile_part_payload;
 
-dic_status dic_j2k_write_minimal_codestream(
+dic_status j2k_write_minimal_codestream(
     const char *path,
-    const dic_j2k_basic_params *params
+    const j2k_basic_params *params
 );
 
-dic_status dic_j2k_write_minimal_codestream_stream(
+dic_status j2k_write_minimal_codestream_stream(
     FILE *file,
-    const dic_j2k_basic_params *params
+    const j2k_basic_params *params
 );
 
-dic_status dic_j2k_write_codestream_with_payload(
+dic_status j2k_write_codestream_with_payload(
     const char *path,
-    const dic_j2k_basic_params *params,
+    const j2k_basic_params *params,
     const uint8_t *payload,
     size_t payload_size
 );
 
-dic_status dic_j2k_write_codestream_with_payload_stream(
+dic_status j2k_write_codestream_with_payload_stream(
     FILE *file,
-    const dic_j2k_basic_params *params,
+    const j2k_basic_params *params,
     const uint8_t *payload,
     size_t payload_size
 );
 
-dic_status dic_j2k_write_codestream_with_tile_parts(
+dic_status j2k_write_codestream_with_tile_parts(
     const char *path,
-    const dic_j2k_basic_params *params,
-    const dic_j2k_tile_part_payload *tile_parts,
+    const j2k_basic_params *params,
+    const j2k_tile_part_payload *tile_parts,
     size_t tile_part_count
 );
 
-dic_status dic_j2k_write_codestream_with_tile_parts_stream(
+dic_status j2k_write_codestream_with_tile_parts_stream(
     FILE *file,
-    const dic_j2k_basic_params *params,
-    const dic_j2k_tile_part_payload *tile_parts,
+    const j2k_basic_params *params,
+    const j2k_tile_part_payload *tile_parts,
     size_t tile_part_count
 );
 
-dic_status dic_j2k_write_empty_packet_codestream(
+dic_status j2k_write_empty_packet_codestream(
     const char *path,
-    const dic_j2k_basic_params *params
+    const j2k_basic_params *params
 );
 
-dic_status dic_j2k_write_empty_packet_codestream_stream(
+dic_status j2k_write_empty_packet_codestream_stream(
     FILE *file,
-    const dic_j2k_basic_params *params
+    const j2k_basic_params *params
 );
 
-dic_status dic_j2k_write_ebcot_packet_codestream(
+dic_status j2k_write_ebcot_packet_codestream(
     const char *path,
-    const dic_j2k_basic_params *params,
-    const dic_j2k_codeblock_stream *streams,
+    const j2k_basic_params *params,
+    const j2k_codeblock_stream *streams,
     size_t stream_count
 );
 
-dic_status dic_j2k_write_ebcot_packet_codestream_stream(
+dic_status j2k_write_ebcot_packet_codestream_stream(
     FILE *file,
-    const dic_j2k_basic_params *params,
-    const dic_j2k_codeblock_stream *streams,
+    const j2k_basic_params *params,
+    const j2k_codeblock_stream *streams,
     size_t stream_count
 );
 

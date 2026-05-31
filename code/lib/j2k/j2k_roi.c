@@ -1,5 +1,5 @@
 /**
- * @file dic_j2k_roi.c
+ * @file j2k_roi.c
  * @brief Builds JPEG 2000 Maxshift ROI coefficient maps for reversible 5-3 transformed tiles.
  *
  * The module traces an image-domain rectangular ROI backwards through the inverse 5-3
@@ -8,14 +8,14 @@
  * ROI participates in packet bit-plane ordering instead of only being signalled by RGN.
  */
 
-#include "j2k/dic_j2k_roi.h"
+#include "j2k/j2k_roi.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 #include "wavelet/dic_dwt53.h"
 
-static void dic_j2k_roi_mark_low_dependency(
+static void j2k_roi_mark_low_dependency(
     uint8_t *input,
     int length,
     int low_index
@@ -40,7 +40,7 @@ static void dic_j2k_roi_mark_low_dependency(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, H.3.1.1, inverse 5-3 samples depend on neighboring low/high coefficients. */
-static void dic_j2k_roi_trace_inverse_1d(
+static void j2k_roi_trace_inverse_1d(
     const uint8_t *output,
     int length,
     uint8_t *input
@@ -66,7 +66,7 @@ static void dic_j2k_roi_trace_inverse_1d(
         n = index / 2;
         if ((index & 1) == 0)
         {
-            dic_j2k_roi_mark_low_dependency(input, length, n);
+            j2k_roi_mark_low_dependency(input, length, n);
         }
         else
         {
@@ -74,13 +74,13 @@ static void dic_j2k_roi_trace_inverse_1d(
 
             if (n < high_count)
                 input[low_count + n] = 1u;
-            dic_j2k_roi_mark_low_dependency(input, length, n);
-            dic_j2k_roi_mark_low_dependency(input, length, n + 1);
+            j2k_roi_mark_low_dependency(input, length, n);
+            j2k_roi_mark_low_dependency(input, length, n + 1);
         }
     }
 }
 
-static dic_status dic_j2k_roi_trace_columns(
+static dic_status j2k_roi_trace_columns(
     const uint8_t *source,
     int stride,
     int width,
@@ -99,14 +99,14 @@ static dic_status dic_j2k_roi_trace_columns(
 
         for (y = 0; y < height; ++y)
             line[y] = source[(size_t)y * (size_t)stride + (size_t)x];
-        dic_j2k_roi_trace_inverse_1d(line, height, traced);
+        j2k_roi_trace_inverse_1d(line, height, traced);
         for (y = 0; y < height; ++y)
             destination[(size_t)y * (size_t)stride + (size_t)x] = traced[y];
     }
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_j2k_roi_trace_rows(
+static dic_status j2k_roi_trace_rows(
     const uint8_t *source,
     int stride,
     int width,
@@ -124,14 +124,14 @@ static dic_status dic_j2k_roi_trace_rows(
         int x;
 
         memcpy(line, source + (size_t)y * (size_t)stride, (size_t)width);
-        dic_j2k_roi_trace_inverse_1d(line, width, traced);
+        j2k_roi_trace_inverse_1d(line, width, traced);
         for (x = 0; x < width; ++x)
             destination[(size_t)y * (size_t)stride + (size_t)x] = traced[x];
     }
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_j2k_roi_trace_one_level(
+static dic_status j2k_roi_trace_one_level(
     const uint8_t *source,
     int stride,
     int width,
@@ -144,13 +144,13 @@ static dic_status dic_j2k_roi_trace_one_level(
 {
     dic_status status;
 
-    status = dic_j2k_roi_trace_columns(source, stride, width, height, scratch, line, traced);
+    status = j2k_roi_trace_columns(source, stride, width, height, scratch, line, traced);
     if (status != DIC_STATUS_OK)
         return status;
-    return dic_j2k_roi_trace_rows(scratch, stride, width, height, destination, line, traced);
+    return j2k_roi_trace_rows(scratch, stride, width, height, destination, line, traced);
 }
 
-static int dic_j2k_roi_rect_intersects_image(
+static int j2k_roi_rect_intersects_image(
     const dic_rect_i32 *rect,
     int width,
     int height
@@ -165,7 +165,7 @@ static int dic_j2k_roi_rect_intersects_image(
     return 1;
 }
 
-static void dic_j2k_roi_seed_image_mask(
+static void j2k_roi_seed_image_mask(
     uint8_t *mask,
     int width,
     int height,
@@ -187,7 +187,7 @@ static void dic_j2k_roi_seed_image_mask(
     }
 }
 
-dic_status dic_j2k_roi_build_shift_map(
+dic_status j2k_roi_build_shift_map(
     int width,
     int height,
     int levels,
@@ -210,7 +210,7 @@ dic_status dic_j2k_roi_build_shift_map(
     if (shift_map == NULL || width <= 0 || height <= 0 || levels < 0)
         return DIC_STATUS_INVALID_ARGUMENT;
     *shift_map = NULL;
-    if (!dic_j2k_roi_rect_intersects_image(roi_rect, width, height))
+    if (!j2k_roi_rect_intersects_image(roi_rect, width, height))
         return DIC_STATUS_OK;
 
     current = (uint8_t *)calloc((size_t)width * (size_t)height, sizeof(current[0]));
@@ -226,7 +226,7 @@ dic_status dic_j2k_roi_build_shift_map(
         goto cleanup;
     }
 
-    dic_j2k_roi_seed_image_mask(current, width, height, roi_rect);
+    j2k_roi_seed_image_mask(current, width, height, roi_rect);
     current_width = width;
     current_height = height;
     for (level = 0; level < levels && status == DIC_STATUS_OK; ++level)
@@ -235,7 +235,7 @@ dic_status dic_j2k_roi_build_shift_map(
         int low_width;
         int low_height;
 
-        status = dic_j2k_roi_trace_one_level(
+        status = j2k_roi_trace_one_level(
             current,
             width,
             current_width,
@@ -288,12 +288,12 @@ cleanup:
     return status;
 }
 
-static uint32_t dic_j2k_roi_value_magnitude(int32_t value)
+static uint32_t j2k_roi_value_magnitude(int32_t value)
 {
     return value < 0 ? (uint32_t)(-(value + 1)) + 1u : (uint32_t)value;
 }
 
-static dic_status dic_j2k_roi_shift_value(int32_t value, uint8_t shift, int32_t *shifted)
+static dic_status j2k_roi_shift_value(int32_t value, uint8_t shift, int32_t *shifted)
 {
     uint32_t magnitude;
     uint32_t shifted_magnitude;
@@ -308,7 +308,7 @@ static dic_status dic_j2k_roi_shift_value(int32_t value, uint8_t shift, int32_t 
     if (shift >= 31u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    magnitude = dic_j2k_roi_value_magnitude(value);
+    magnitude = j2k_roi_value_magnitude(value);
     if (magnitude > ((uint32_t)INT32_MAX >> shift))
         return DIC_STATUS_INVALID_ARGUMENT;
 
@@ -317,7 +317,7 @@ static dic_status dic_j2k_roi_shift_value(int32_t value, uint8_t shift, int32_t 
     return DIC_STATUS_OK;
 }
 
-dic_status dic_j2k_roi_apply_shift_map(
+dic_status j2k_roi_apply_shift_map(
     int32_t *plane,
     int width,
     int height,
@@ -338,7 +338,7 @@ dic_status dic_j2k_roi_apply_shift_map(
     {
         if (shift_map[index] != 0u)
         {
-            status = dic_j2k_roi_shift_value(plane[index], shift, plane + index);
+            status = j2k_roi_shift_value(plane[index], shift, plane + index);
             if (status != DIC_STATUS_OK)
                 return status;
         }

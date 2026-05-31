@@ -1,8 +1,8 @@
 #include <stdio.h>
 
-#include "j2k/dic_j2k_codestream.h"
-#include "j2k/dic_j2k_parse.h"
-#include "j2k/dic_jp2_file.h"
+#include "j2k/j2k_codestream.h"
+#include "j2k/j2k_parse.h"
+#include "j2k/jp2_file.h"
 #include "test_helpers.h"
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.3-A.6 and Annex I.5.2.1, parser reads codestream metadata from J2K and JP2. */
@@ -10,8 +10,8 @@ int main(void)
 {
     const char *j2k_path = "dic_parse_test.j2k";
     const char *jp2_path = "dic_parse_test.jp2";
-    dic_j2k_basic_params params = {0};
-    dic_j2k_codestream_info info;
+    j2k_basic_params params = {0};
+    j2k_codestream_info info;
     unsigned int resolution;
 
     params.width = 37u;
@@ -31,8 +31,8 @@ int main(void)
         params.precinct_height_exponents[resolution] = 15u;
     }
 
-    DIC_EXPECT(dic_j2k_write_empty_packet_codestream(j2k_path, &params) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_j2k_read_codestream_info(j2k_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_empty_packet_codestream(j2k_path, &params) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_codestream_info(j2k_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == params.width);
     DIC_EXPECT(info.params.height == params.height);
     DIC_EXPECT(info.params.components == params.components);
@@ -52,8 +52,8 @@ int main(void)
     DIC_EXPECT(info.tile_part_count == 6u);
     DIC_EXPECT(info.total_tile_part_payload_bytes == info.tile_part_payload_bytes * info.tile_part_count);
 
-    DIC_EXPECT(dic_jp2_write_minimal_file(jp2_path, &params) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_jp2_read_codestream_info(jp2_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(jp2_write_minimal_file(jp2_path, &params) == DIC_STATUS_OK);
+    DIC_EXPECT(jp2_read_codestream_info(jp2_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == params.width);
     DIC_EXPECT(info.params.height == params.height);
     DIC_EXPECT(info.params.components == params.components);

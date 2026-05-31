@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-typedef struct dic_j2k_codeblock_grid
+typedef struct j2k_codeblock_grid
 {
     dic_rect_i32 subband; /**< Sub-band rectangle in tile-component coefficient coordinates. */
     int codeblock_width; /**< Nominal code-block width in coefficients. */
@@ -18,9 +18,9 @@ typedef struct dic_j2k_codeblock_grid
     int blocks_x; /**< Number of code-blocks across the sub-band. */
     int blocks_y; /**< Number of code-blocks down the sub-band. */
     size_t block_count; /**< Total number of code-blocks in raster order. */
-} dic_j2k_codeblock_grid;
+} j2k_codeblock_grid;
 
-typedef struct dic_j2k_precinct_grid
+typedef struct j2k_precinct_grid
 {
     dic_rect_i32 subband; /**< Sub-band rectangle covered by the precinct partition. */
     int codeblock_width; /**< Code-block width used by the sub-band grid. */
@@ -34,9 +34,9 @@ typedef struct dic_j2k_precinct_grid
     int precincts_x; /**< Number of precincts intersecting the sub-band horizontally. */
     int precincts_y; /**< Number of precincts intersecting the sub-band vertically. */
     size_t precinct_count; /**< Total number of precincts intersecting the sub-band in raster order. */
-} dic_j2k_precinct_grid;
+} j2k_precinct_grid;
 
-dic_status dic_j2k_codeblock_grid_for_subband(
+dic_status j2k_codeblock_grid_for_subband(
     int width,
     int height,
     int levels,
@@ -44,28 +44,28 @@ dic_status dic_j2k_codeblock_grid_for_subband(
     dic_subband_orientation orientation,
     int codeblock_width,
     int codeblock_height,
-    dic_j2k_codeblock_grid *grid
+    j2k_codeblock_grid *grid
 );
 
-dic_status dic_j2k_codeblock_rect(
-    const dic_j2k_codeblock_grid *grid,
+dic_status j2k_codeblock_rect(
+    const j2k_codeblock_grid *grid,
     int block_x,
     int block_y,
     dic_rect_i32 *rect
 );
 
 /** Builds the precinct partition projected onto one sub-band code-block grid. */
-dic_status dic_j2k_precinct_grid_for_subband(
-    const dic_j2k_codeblock_grid *codeblock_grid,
+dic_status j2k_precinct_grid_for_subband(
+    const j2k_codeblock_grid *codeblock_grid,
     int resolution,
     uint8_t precinct_width_exponent,
     uint8_t precinct_height_exponent,
-    dic_j2k_precinct_grid *precinct_grid
+    j2k_precinct_grid *precinct_grid
 );
 
 /** Returns the code-block window covered by one precinct in sub-band raster coordinates. */
-dic_status dic_j2k_precinct_codeblock_window(
-    const dic_j2k_precinct_grid *precinct_grid,
+dic_status j2k_precinct_codeblock_window(
+    const j2k_precinct_grid *precinct_grid,
     int precinct_x,
     int precinct_y,
     int *first_block_x,
@@ -74,13 +74,13 @@ dic_status dic_j2k_precinct_codeblock_window(
     int *blocks_y
 );
 
-dic_status dic_j2k_resolution_subband_count(
+dic_status j2k_resolution_subband_count(
     int levels,
     int resolution,
     int *count
 );
 
-dic_status dic_j2k_packet_count_lrcp(
+dic_status j2k_packet_count_lrcp(
     int components,
     int levels,
     int layers,

@@ -1,5 +1,5 @@
 /**
- * @file dic_j2k_packet.c
+ * @file j2k_packet.c
  * @brief Builds JPEG 2000 packet headers and packet payloads according to T.800 Annex B.
  *
  * This implementation packs packet-header bits with Annex B byte-stuffing rules, encodes
@@ -8,87 +8,87 @@
  * contributions. Packet sub-band payloads may select a precinct-sized window from the
  * complete sub-band code-block grid, leaving progression-order scheduling to callers.
  *
- * References: dic_j2k_ebcot.h for code-block contribution metadata, dic_j2k_codestream.c
- * for tile-part emission, dic_j2k_tagtree.c for tag-tree helpers, and Annex J.11 packet
+ * References: j2k_ebcot.h for code-block contribution metadata, j2k_codestream.c
+ * for tile-part emission, j2k_tagtree.c for tag-tree helpers, and Annex J.11 packet
  * header decoding examples.
  */
 
-#include "j2k/dic_j2k_packet.h"
-#include "j2k/dic_j2k_debug.h"
+#include "j2k/j2k_packet.h"
+#include "j2k/j2k_debug.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct dic_j2k_packet_tagtree_level
+typedef struct j2k_packet_tagtree_level
 {
     int width;
     int height;
     size_t offset;
-} dic_j2k_packet_tagtree_level;
+} j2k_packet_tagtree_level;
 
-typedef struct dic_j2k_packet_tagtree_node
+typedef struct j2k_packet_tagtree_node
 {
     uint32_t value;
     uint32_t low;
     int known;
-} dic_j2k_packet_tagtree_node;
+} j2k_packet_tagtree_node;
 
-typedef struct dic_j2k_packet_tagtree
+typedef struct j2k_packet_tagtree
 {
-    dic_j2k_packet_tagtree_level *levels;
-    dic_j2k_packet_tagtree_node *nodes;
+    j2k_packet_tagtree_level *levels;
+    j2k_packet_tagtree_node *nodes;
     size_t level_count;
     size_t node_count;
-} dic_j2k_packet_tagtree;
+} j2k_packet_tagtree;
 
-typedef struct dic_j2k_packet_parse_codeblock_state
+typedef struct j2k_packet_parse_codeblock_state
 {
     uint32_t coding_passes;
     uint32_t lblock;
     uint32_t zero_bitplanes;
-} dic_j2k_packet_parse_codeblock_state;
+} j2k_packet_parse_codeblock_state;
 
-typedef struct dic_j2k_packet_parse_subband_state
+typedef struct j2k_packet_parse_subband_state
 {
     int blocks_x;
     int blocks_y;
     int first_block_x;
     int first_block_y;
     int total_blocks_x;
-    dic_j2k_packet_parse_codeblock_state *codeblocks;
-    dic_j2k_packet_tagtree inclusion_tree;
-    dic_j2k_packet_tagtree zero_tree;
-} dic_j2k_packet_parse_subband_state;
+    j2k_packet_parse_codeblock_state *codeblocks;
+    j2k_packet_tagtree inclusion_tree;
+    j2k_packet_tagtree zero_tree;
+} j2k_packet_parse_subband_state;
 
-struct dic_j2k_packet_header_parser
+struct j2k_packet_header_parser
 {
-    dic_j2k_packet_parse_subband_state *subbands;
+    j2k_packet_parse_subband_state *subbands;
     size_t subband_count;
     int terminated_passes;
 };
 
-typedef struct dic_j2k_packet_bit_reader
+typedef struct j2k_packet_bit_reader
 {
     const uint8_t *data;
     size_t size;
     size_t byte_offset;
     unsigned int bit_offset;
-} dic_j2k_packet_bit_reader;
+} j2k_packet_bit_reader;
 
-typedef struct dic_j2k_packet_pending_range
+typedef struct j2k_packet_pending_range
 {
     size_t range_index;
     size_t length;
-} dic_j2k_packet_pending_range;
+} j2k_packet_pending_range;
 
-typedef struct dic_j2k_packet_pending_range_list
+typedef struct j2k_packet_pending_range_list
 {
-    dic_j2k_packet_pending_range *items;
+    j2k_packet_pending_range *items;
     size_t count;
     size_t capacity;
-} dic_j2k_packet_pending_range_list;
+} j2k_packet_pending_range_list;
 
-static int dic_j2k_packet_active_blocks_x(
+static int j2k_packet_active_blocks_x(
     int full_blocks_x,
     int packet_blocks_x
 )
@@ -96,7 +96,7 @@ static int dic_j2k_packet_active_blocks_x(
     return packet_blocks_x > 0 ? packet_blocks_x : full_blocks_x;
 }
 
-static int dic_j2k_packet_active_blocks_y(
+static int j2k_packet_active_blocks_y(
     int full_blocks_y,
     int packet_blocks_y
 )
@@ -104,7 +104,7 @@ static int dic_j2k_packet_active_blocks_y(
     return packet_blocks_y > 0 ? packet_blocks_y : full_blocks_y;
 }
 
-static dic_status dic_j2k_packet_validate_window(
+static dic_status j2k_packet_validate_window(
     int full_blocks_x,
     int full_blocks_y,
     int first_block_x,
@@ -124,8 +124,8 @@ static dic_status dic_j2k_packet_validate_window(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_j2k_packet_payload_window(
-    const dic_j2k_packet_subband_payload *subband,
+static dic_status j2k_packet_payload_window(
+    const j2k_packet_subband_payload *subband,
     int *first_block_x,
     int *first_block_y,
     int *packet_blocks_x,
@@ -140,9 +140,9 @@ static dic_status dic_j2k_packet_payload_window(
 
     *first_block_x = subband->first_block_x;
     *first_block_y = subband->first_block_y;
-    *packet_blocks_x = dic_j2k_packet_active_blocks_x(subband->blocks_x, subband->packet_blocks_x);
-    *packet_blocks_y = dic_j2k_packet_active_blocks_y(subband->blocks_y, subband->packet_blocks_y);
-    return dic_j2k_packet_validate_window(
+    *packet_blocks_x = j2k_packet_active_blocks_x(subband->blocks_x, subband->packet_blocks_x);
+    *packet_blocks_y = j2k_packet_active_blocks_y(subband->blocks_y, subband->packet_blocks_y);
+    return j2k_packet_validate_window(
         subband->blocks_x,
         subband->blocks_y,
         *first_block_x,
@@ -152,8 +152,8 @@ static dic_status dic_j2k_packet_payload_window(
     );
 }
 
-static dic_status dic_j2k_packet_layout_window(
-    const dic_j2k_packet_subband_layout *subband,
+static dic_status j2k_packet_layout_window(
+    const j2k_packet_subband_layout *subband,
     int *first_block_x,
     int *first_block_y,
     int *packet_blocks_x,
@@ -168,9 +168,9 @@ static dic_status dic_j2k_packet_layout_window(
 
     *first_block_x = subband->first_block_x;
     *first_block_y = subband->first_block_y;
-    *packet_blocks_x = dic_j2k_packet_active_blocks_x(subband->blocks_x, subband->packet_blocks_x);
-    *packet_blocks_y = dic_j2k_packet_active_blocks_y(subband->blocks_y, subband->packet_blocks_y);
-    return dic_j2k_packet_validate_window(
+    *packet_blocks_x = j2k_packet_active_blocks_x(subband->blocks_x, subband->packet_blocks_x);
+    *packet_blocks_y = j2k_packet_active_blocks_y(subband->blocks_y, subband->packet_blocks_y);
+    return j2k_packet_validate_window(
         subband->blocks_x,
         subband->blocks_y,
         *first_block_x,
@@ -180,8 +180,8 @@ static dic_status dic_j2k_packet_layout_window(
     );
 }
 
-static size_t dic_j2k_packet_payload_stream_index(
-    const dic_j2k_packet_subband_payload *subband,
+static size_t j2k_packet_payload_stream_index(
+    const j2k_packet_subband_payload *subband,
     int local_block_x,
     int local_block_y
 )
@@ -191,9 +191,9 @@ static size_t dic_j2k_packet_payload_stream_index(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.1, packet header bits are packed MSB-first with stuffing after 0xFF. */
-void dic_j2k_packet_header_init(dic_j2k_packet_header *header)
+void j2k_packet_header_init(j2k_packet_header *header)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (header == NULL)
         return;
     header->data = NULL;
@@ -206,18 +206,18 @@ void dic_j2k_packet_header_init(dic_j2k_packet_header *header)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10, packet headers are byte buffers preceding packet bodies. */
-void dic_j2k_packet_header_free(dic_j2k_packet_header *header)
+void j2k_packet_header_free(j2k_packet_header *header)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (header == NULL)
         return;
     free(header->data);
-    dic_j2k_packet_header_init(header);
+    j2k_packet_header_init(header);
 }
 
-void dic_j2k_packet_parse_result_init(dic_j2k_packet_parse_result *result)
+void j2k_packet_parse_result_init(j2k_packet_parse_result *result)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (result == NULL)
         return;
     result->ranges = NULL;
@@ -228,17 +228,17 @@ void dic_j2k_packet_parse_result_init(dic_j2k_packet_parse_result *result)
     result->is_empty = 0;
 }
 
-void dic_j2k_packet_parse_result_free(dic_j2k_packet_parse_result *result)
+void j2k_packet_parse_result_free(j2k_packet_parse_result *result)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (result == NULL)
         return;
     free(result->ranges);
-    dic_j2k_packet_parse_result_init(result);
+    j2k_packet_parse_result_init(result);
 }
 
-static dic_status dic_j2k_packet_parse_result_push_range(
-    dic_j2k_packet_parse_result *result,
+static dic_status j2k_packet_parse_result_push_range(
+    j2k_packet_parse_result *result,
     size_t subband_index,
     size_t codeblock_index,
     uint32_t pass_index,
@@ -246,8 +246,8 @@ static dic_status dic_j2k_packet_parse_result_push_range(
     size_t *range_index
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_packet_pass_range *new_ranges;
+    j2k_DEBUG_ENTER();
+    j2k_packet_pass_range *new_ranges;
     size_t new_capacity;
 
     if (result == NULL || range_index == NULL)
@@ -257,7 +257,7 @@ static dic_status dic_j2k_packet_parse_result_push_range(
         new_capacity = result->range_capacity == 0u ? 8u : result->range_capacity * 2u;
         if (new_capacity < result->range_capacity)
             return DIC_STATUS_INVALID_ARGUMENT;
-        new_ranges = (dic_j2k_packet_pass_range *)realloc(
+        new_ranges = (j2k_packet_pass_range *)realloc(
             result->ranges,
             new_capacity * sizeof(result->ranges[0])
         );
@@ -276,9 +276,9 @@ static dic_status dic_j2k_packet_parse_result_push_range(
     return DIC_STATUS_OK;
 }
 
-static void dic_j2k_packet_pending_range_list_free(dic_j2k_packet_pending_range_list *list)
+static void j2k_packet_pending_range_list_free(j2k_packet_pending_range_list *list)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (list == NULL)
         return;
     free(list->items);
@@ -287,14 +287,14 @@ static void dic_j2k_packet_pending_range_list_free(dic_j2k_packet_pending_range_
     list->capacity = 0u;
 }
 
-static dic_status dic_j2k_packet_pending_range_list_push(
-    dic_j2k_packet_pending_range_list *list,
+static dic_status j2k_packet_pending_range_list_push(
+    j2k_packet_pending_range_list *list,
     size_t range_index,
     size_t length
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_packet_pending_range *new_items;
+    j2k_DEBUG_ENTER();
+    j2k_packet_pending_range *new_items;
     size_t new_capacity;
 
     if (list == NULL)
@@ -304,7 +304,7 @@ static dic_status dic_j2k_packet_pending_range_list_push(
         new_capacity = list->capacity == 0u ? 8u : list->capacity * 2u;
         if (new_capacity < list->capacity)
             return DIC_STATUS_INVALID_ARGUMENT;
-        new_items = (dic_j2k_packet_pending_range *)realloc(
+        new_items = (j2k_packet_pending_range *)realloc(
             list->items,
             new_capacity * sizeof(list->items[0])
         );
@@ -320,9 +320,9 @@ static dic_status dic_j2k_packet_pending_range_list_push(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.1, packet headers are emitted as a whole number of bytes. */
-static dic_status dic_j2k_packet_reserve(dic_j2k_packet_header *header, size_t additional)
+static dic_status j2k_packet_reserve(j2k_packet_header *header, size_t additional)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t *new_data;
     size_t new_capacity;
 
@@ -349,10 +349,10 @@ static dic_status dic_j2k_packet_reserve(dic_j2k_packet_header *header, size_t a
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.1, after an emitted 0xFF byte the following byte reserves its MSB as a zero stuff bit. */
-static dic_status dic_j2k_packet_emit_current(dic_j2k_packet_header *header)
+static dic_status j2k_packet_emit_current(j2k_packet_header *header)
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_status status = dic_j2k_packet_reserve(header, 1u);
+    j2k_DEBUG_ENTER();
+    dic_status status = j2k_packet_reserve(header, 1u);
 
     if (status != DIC_STATUS_OK)
         return status;
@@ -368,12 +368,12 @@ static dic_status dic_j2k_packet_emit_current(dic_j2k_packet_header *header)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.1, packet header bits are packed from MSB to LSB. */
-dic_status dic_j2k_packet_header_append_bit(
-    dic_j2k_packet_header *header,
+dic_status j2k_packet_header_append_bit(
+    j2k_packet_header *header,
     unsigned int bit
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     unsigned int bit_position;
 
     if (header == NULL)
@@ -387,14 +387,14 @@ dic_status dic_j2k_packet_header_append_bit(
 
     ++header->bits_used;
     if (header->bits_used == header->bits_available)
-        return dic_j2k_packet_emit_current(header);
+        return j2k_packet_emit_current(header);
     return DIC_STATUS_OK;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.1, the final packet-header byte is padded to a byte boundary and shall not be 0xFF. */
-dic_status dic_j2k_packet_header_finish(dic_j2k_packet_header *header)
+dic_status j2k_packet_header_finish(j2k_packet_header *header)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     dic_status status;
 
     if (header == NULL)
@@ -404,7 +404,7 @@ dic_status dic_j2k_packet_header_finish(dic_j2k_packet_header *header)
 
     if (header->bits_used > 0u || header->bits_available == 7u)
     {
-        status = dic_j2k_packet_emit_current(header);
+        status = j2k_packet_emit_current(header);
         if (status != DIC_STATUS_OK)
             return status;
     }
@@ -414,31 +414,31 @@ dic_status dic_j2k_packet_header_finish(dic_j2k_packet_header *header)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.3, the first packet-header bit is zero for an empty packet. */
-dic_status dic_j2k_packet_build_empty_header(dic_j2k_packet_header *header)
+dic_status j2k_packet_build_empty_header(j2k_packet_header *header)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     dic_status status;
 
     if (header == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    dic_j2k_packet_header_free(header);
-    dic_j2k_packet_header_init(header);
+    j2k_packet_header_free(header);
+    j2k_packet_header_init(header);
 
-    status = dic_j2k_packet_header_append_bit(header, 0u);
+    status = j2k_packet_header_append_bit(header, 0u);
     if (status != DIC_STATUS_OK)
         return status;
 
-    return dic_j2k_packet_header_finish(header);
+    return j2k_packet_header_finish(header);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.5 and B.10.7, several packet fields use unary zero-runs terminated by one. */
-dic_status dic_j2k_packet_header_append_unary_zeros_then_one(
-    dic_j2k_packet_header *header,
+dic_status j2k_packet_header_append_unary_zeros_then_one(
+    j2k_packet_header *header,
     uint32_t zero_count
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t index;
     dic_status status;
 
@@ -447,22 +447,22 @@ dic_status dic_j2k_packet_header_append_unary_zeros_then_one(
 
     for (index = 0u; index < zero_count; ++index)
     {
-        status = dic_j2k_packet_header_append_bit(header, 0u);
+        status = j2k_packet_header_append_bit(header, 0u);
         if (status != DIC_STATUS_OK)
             return status;
     }
 
-    return dic_j2k_packet_header_append_bit(header, 1u);
+    return j2k_packet_header_append_bit(header, 1u);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.7.1, codeword segment length is represented with a fixed number of packet-header bits. */
-static dic_status dic_j2k_packet_header_append_bits(
-    dic_j2k_packet_header *header,
+static dic_status j2k_packet_header_append_bits(
+    j2k_packet_header *header,
     uint32_t value,
     uint32_t bit_count
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t bit;
     dic_status status;
 
@@ -470,7 +470,7 @@ static dic_status dic_j2k_packet_header_append_bits(
     {
         uint32_t shift = bit_count - 1u - bit;
 
-        status = dic_j2k_packet_header_append_bit(header, (value >> shift) & 1u);
+        status = j2k_packet_header_append_bit(header, (value >> shift) & 1u);
         if (status != DIC_STATUS_OK)
             return status;
     }
@@ -478,9 +478,9 @@ static dic_status dic_j2k_packet_header_append_bits(
     return DIC_STATUS_OK;
 }
 
-static uint32_t dic_j2k_packet_floor_log2(uint32_t value)
+static uint32_t j2k_packet_floor_log2(uint32_t value)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t result = 0u;
 
     while (value > 1u)
@@ -492,9 +492,9 @@ static uint32_t dic_j2k_packet_floor_log2(uint32_t value)
     return result;
 }
 
-static uint32_t dic_j2k_packet_bit_width(uint32_t value)
+static uint32_t j2k_packet_bit_width(uint32_t value)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t bits = 1u;
 
     while (value > 1u)
@@ -506,30 +506,30 @@ static uint32_t dic_j2k_packet_bit_width(uint32_t value)
     return bits;
 }
 
-static void dic_j2k_packet_tagtree_init(dic_j2k_packet_tagtree *tree)
+static void j2k_packet_tagtree_init(j2k_packet_tagtree *tree)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     tree->levels = NULL;
     tree->nodes = NULL;
     tree->level_count = 0u;
     tree->node_count = 0u;
 }
 
-static void dic_j2k_packet_tagtree_free(dic_j2k_packet_tagtree *tree)
+static void j2k_packet_tagtree_free(j2k_packet_tagtree *tree)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     free(tree->levels);
     free(tree->nodes);
-    dic_j2k_packet_tagtree_init(tree);
+    j2k_packet_tagtree_init(tree);
 }
 
-static dic_status dic_j2k_packet_tagtree_alloc(
-    dic_j2k_packet_tagtree *tree,
+static dic_status j2k_packet_tagtree_alloc(
+    j2k_packet_tagtree *tree,
     int width,
     int height
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int w = width;
     int h = height;
     size_t levels = 0u;
@@ -539,7 +539,7 @@ static dic_status dic_j2k_packet_tagtree_alloc(
     if (tree == NULL || width <= 0 || height <= 0)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    dic_j2k_packet_tagtree_free(tree);
+    j2k_packet_tagtree_free(tree);
     while (w > 0 && h > 0)
     {
         if ((size_t)w > (size_t)-1 / (size_t)h)
@@ -554,11 +554,11 @@ static dic_status dic_j2k_packet_tagtree_alloc(
         h = (h + 1) / 2;
     }
 
-    tree->levels = (dic_j2k_packet_tagtree_level *)calloc(levels, sizeof(tree->levels[0]));
-    tree->nodes = (dic_j2k_packet_tagtree_node *)calloc(nodes, sizeof(tree->nodes[0]));
+    tree->levels = (j2k_packet_tagtree_level *)calloc(levels, sizeof(tree->levels[0]));
+    tree->nodes = (j2k_packet_tagtree_node *)calloc(nodes, sizeof(tree->nodes[0]));
     if (tree->levels == NULL || tree->nodes == NULL)
     {
-        dic_j2k_packet_tagtree_free(tree);
+        j2k_packet_tagtree_free(tree);
         return DIC_STATUS_MEMORY_ERROR;
     }
 
@@ -582,27 +582,27 @@ static dic_status dic_j2k_packet_tagtree_alloc(
     return DIC_STATUS_OK;
 }
 
-static size_t dic_j2k_packet_tagtree_index(
-    const dic_j2k_packet_tagtree *tree,
+static size_t j2k_packet_tagtree_index(
+    const j2k_packet_tagtree *tree,
     size_t level,
     int x,
     int y
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     return tree->levels[level].offset
         + (size_t)y * (size_t)tree->levels[level].width
         + (size_t)x;
 }
 
-static dic_status dic_j2k_packet_tagtree_set_leaf(
-    dic_j2k_packet_tagtree *tree,
+static dic_status j2k_packet_tagtree_set_leaf(
+    j2k_packet_tagtree *tree,
     int x,
     int y,
     uint32_t value
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
 
     if (tree == NULL || tree->nodes == NULL || x < 0 || y < 0)
@@ -610,21 +610,21 @@ static dic_status dic_j2k_packet_tagtree_set_leaf(
     if (x >= tree->levels[0].width || y >= tree->levels[0].height)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    index = dic_j2k_packet_tagtree_index(tree, 0u, x, y);
+    index = j2k_packet_tagtree_index(tree, 0u, x, y);
     tree->nodes[index].value = value;
     return DIC_STATUS_OK;
 }
 
-static void dic_j2k_packet_tagtree_build_minima(dic_j2k_packet_tagtree *tree)
+static void j2k_packet_tagtree_build_minima(j2k_packet_tagtree *tree)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t level;
 
     for (level = 1u; level < tree->level_count; ++level)
     {
         int y;
-        const dic_j2k_packet_tagtree_level *current = tree->levels + level;
-        const dic_j2k_packet_tagtree_level *child = tree->levels + level - 1u;
+        const j2k_packet_tagtree_level *current = tree->levels + level;
+        const j2k_packet_tagtree_level *child = tree->levels + level - 1u;
 
         for (y = 0; y < current->height; ++y)
         {
@@ -649,27 +649,27 @@ static void dic_j2k_packet_tagtree_build_minima(dic_j2k_packet_tagtree *tree)
 
                         if (cx >= child->width)
                             continue;
-                        value = tree->nodes[dic_j2k_packet_tagtree_index(tree, level - 1u, cx, cy)].value;
+                        value = tree->nodes[j2k_packet_tagtree_index(tree, level - 1u, cx, cy)].value;
                         if (value < minimum)
                             minimum = value;
                     }
                 }
-                tree->nodes[dic_j2k_packet_tagtree_index(tree, level, x, y)].value = minimum;
+                tree->nodes[j2k_packet_tagtree_index(tree, level, x, y)].value = minimum;
             }
         }
     }
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.2, each tag-tree node keeps causal state and emits zero tests until the queried threshold is known. */
-static dic_status dic_j2k_packet_tagtree_encode_leaf(
-    dic_j2k_packet_tagtree *tree,
+static dic_status j2k_packet_tagtree_encode_leaf(
+    j2k_packet_tagtree *tree,
     int x,
     int y,
     uint32_t threshold,
-    dic_j2k_packet_header *header
+    j2k_packet_header *header
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t level;
     uint32_t lower_bound = 0u;
     dic_status status;
@@ -684,14 +684,14 @@ static dic_status dic_j2k_packet_tagtree_encode_leaf(
         size_t actual_level = level - 1u;
         int node_x = x >> actual_level;
         int node_y = y >> actual_level;
-        dic_j2k_packet_tagtree_node *node;
+        j2k_packet_tagtree_node *node;
 
         if (node_x >= tree->levels[actual_level].width)
             node_x = tree->levels[actual_level].width - 1;
         if (node_y >= tree->levels[actual_level].height)
             node_y = tree->levels[actual_level].height - 1;
 
-        node = tree->nodes + dic_j2k_packet_tagtree_index(tree, actual_level, node_x, node_y);
+        node = tree->nodes + j2k_packet_tagtree_index(tree, actual_level, node_x, node_y);
         if (node->low < lower_bound)
             node->low = lower_bound;
         if (!node->known)
@@ -700,14 +700,14 @@ static dic_status dic_j2k_packet_tagtree_encode_leaf(
             {
                 if (node->value > node->low)
                 {
-                    status = dic_j2k_packet_header_append_bit(header, 0u);
+                    status = j2k_packet_header_append_bit(header, 0u);
                     if (status != DIC_STATUS_OK)
                         return status;
                     ++node->low;
                 }
                 else
                 {
-                    status = dic_j2k_packet_header_append_bit(header, 1u);
+                    status = j2k_packet_header_append_bit(header, 1u);
                     if (status != DIC_STATUS_OK)
                         return status;
                     node->known = 1;
@@ -723,37 +723,37 @@ static dic_status dic_j2k_packet_tagtree_encode_leaf(
     return DIC_STATUS_OK;
 }
 
-static void dic_j2k_packet_bit_reader_init(
-    dic_j2k_packet_bit_reader *reader,
+static void j2k_packet_bit_reader_init(
+    j2k_packet_bit_reader *reader,
     const uint8_t *data,
     size_t size
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     reader->data = data;
     reader->size = size;
     reader->byte_offset = 0u;
     reader->bit_offset = 0u;
 }
 
-static unsigned int dic_j2k_packet_reader_bits_in_current(const dic_j2k_packet_bit_reader *reader)
+static unsigned int j2k_packet_reader_bits_in_current(const j2k_packet_bit_reader *reader)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     return reader->byte_offset > 0u && reader->data[reader->byte_offset - 1u] == 0xffu ? 7u : 8u;
 }
 
-static dic_status dic_j2k_packet_reader_read_bit(
-    dic_j2k_packet_bit_reader *reader,
+static dic_status j2k_packet_reader_read_bit(
+    j2k_packet_bit_reader *reader,
     uint32_t *bit
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     unsigned int bits_in_current;
     unsigned int shift;
 
     if (reader == NULL || bit == NULL || reader->byte_offset >= reader->size)
         return DIC_J2K_FORMAT_ERROR;
-    bits_in_current = dic_j2k_packet_reader_bits_in_current(reader);
+    bits_in_current = j2k_packet_reader_bits_in_current(reader);
     shift = bits_in_current - 1u - reader->bit_offset;
     *bit = (reader->data[reader->byte_offset] >> shift) & 1u;
     ++reader->bit_offset;
@@ -765,13 +765,13 @@ static dic_status dic_j2k_packet_reader_read_bit(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_j2k_packet_reader_read_bits(
-    dic_j2k_packet_bit_reader *reader,
+static dic_status j2k_packet_reader_read_bits(
+    j2k_packet_bit_reader *reader,
     uint32_t bit_count,
     uint32_t *value
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t index;
     uint32_t result = 0u;
 
@@ -780,7 +780,7 @@ static dic_status dic_j2k_packet_reader_read_bits(
     for (index = 0u; index < bit_count; ++index)
     {
         uint32_t bit;
-        dic_status status = dic_j2k_packet_reader_read_bit(reader, &bit);
+        dic_status status = j2k_packet_reader_read_bit(reader, &bit);
 
         if (status != DIC_STATUS_OK)
             return status;
@@ -790,24 +790,24 @@ static dic_status dic_j2k_packet_reader_read_bits(
     return DIC_STATUS_OK;
 }
 
-static size_t dic_j2k_packet_reader_aligned_offset(const dic_j2k_packet_bit_reader *reader)
+static size_t j2k_packet_reader_aligned_offset(const j2k_packet_bit_reader *reader)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     return reader->byte_offset + (reader->bit_offset == 0u ? 0u : 1u);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.2, tag-tree decoding advances node lower bounds until the queried threshold is determined. */
-static dic_status dic_j2k_packet_tagtree_decode_leaf(
-    dic_j2k_packet_tagtree *tree,
+static dic_status j2k_packet_tagtree_decode_leaf(
+    j2k_packet_tagtree *tree,
     int x,
     int y,
     uint32_t threshold,
-    dic_j2k_packet_bit_reader *reader,
+    j2k_packet_bit_reader *reader,
     int *known,
     uint32_t *value
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t level;
     uint32_t lower_bound = 0u;
 
@@ -823,13 +823,13 @@ static dic_status dic_j2k_packet_tagtree_decode_leaf(
         size_t actual_level = level - 1u;
         int node_x = x >> actual_level;
         int node_y = y >> actual_level;
-        dic_j2k_packet_tagtree_node *node;
+        j2k_packet_tagtree_node *node;
 
         if (node_x >= tree->levels[actual_level].width)
             node_x = tree->levels[actual_level].width - 1;
         if (node_y >= tree->levels[actual_level].height)
             node_y = tree->levels[actual_level].height - 1;
-        node = tree->nodes + dic_j2k_packet_tagtree_index(tree, actual_level, node_x, node_y);
+        node = tree->nodes + j2k_packet_tagtree_index(tree, actual_level, node_x, node_y);
         if (node->low < lower_bound)
             node->low = lower_bound;
         if (!node->known)
@@ -837,7 +837,7 @@ static dic_status dic_j2k_packet_tagtree_decode_leaf(
             while (node->low <= threshold)
             {
                 uint32_t bit;
-                dic_status status = dic_j2k_packet_reader_read_bit(reader, &bit);
+                dic_status status = j2k_packet_reader_read_bit(reader, &bit);
 
                 if (status != DIC_STATUS_OK)
                     return status;
@@ -859,15 +859,15 @@ static dic_status dic_j2k_packet_tagtree_decode_leaf(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_j2k_packet_tagtree_decode_value(
-    dic_j2k_packet_tagtree *tree,
+static dic_status j2k_packet_tagtree_decode_value(
+    j2k_packet_tagtree *tree,
     int x,
     int y,
-    dic_j2k_packet_bit_reader *reader,
+    j2k_packet_bit_reader *reader,
     uint32_t *value
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t threshold;
 
     if (value == NULL)
@@ -875,7 +875,7 @@ static dic_status dic_j2k_packet_tagtree_decode_value(
     for (threshold = 0u; threshold <= 64u; ++threshold)
     {
         int known;
-        dic_status status = dic_j2k_packet_tagtree_decode_leaf(
+        dic_status status = j2k_packet_tagtree_decode_leaf(
             tree,
             x,
             y,
@@ -893,17 +893,17 @@ static dic_status dic_j2k_packet_tagtree_decode_value(
     return DIC_J2K_FORMAT_ERROR;
 }
 
-static dic_status dic_j2k_packet_header_parse_coding_passes(
-    dic_j2k_packet_bit_reader *reader,
+static dic_status j2k_packet_header_parse_coding_passes(
+    j2k_packet_bit_reader *reader,
     uint32_t *passes
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t bit;
     uint32_t value;
     dic_status status;
 
-    status = dic_j2k_packet_reader_read_bit(reader, &bit);
+    status = j2k_packet_reader_read_bit(reader, &bit);
     if (status != DIC_STATUS_OK)
         return status;
     if (bit == 0u)
@@ -911,7 +911,7 @@ static dic_status dic_j2k_packet_header_parse_coding_passes(
         *passes = 1u;
         return DIC_STATUS_OK;
     }
-    status = dic_j2k_packet_reader_read_bit(reader, &bit);
+    status = j2k_packet_reader_read_bit(reader, &bit);
     if (status != DIC_STATUS_OK)
         return status;
     if (bit == 0u)
@@ -919,7 +919,7 @@ static dic_status dic_j2k_packet_header_parse_coding_passes(
         *passes = 2u;
         return DIC_STATUS_OK;
     }
-    status = dic_j2k_packet_reader_read_bits(reader, 2u, &value);
+    status = j2k_packet_reader_read_bits(reader, 2u, &value);
     if (status != DIC_STATUS_OK)
         return status;
     if (value < 3u)
@@ -927,7 +927,7 @@ static dic_status dic_j2k_packet_header_parse_coding_passes(
         *passes = value + 3u;
         return DIC_STATUS_OK;
     }
-    status = dic_j2k_packet_reader_read_bits(reader, 5u, &value);
+    status = j2k_packet_reader_read_bits(reader, 5u, &value);
     if (status != DIC_STATUS_OK)
         return status;
     if (value < 31u)
@@ -935,58 +935,58 @@ static dic_status dic_j2k_packet_header_parse_coding_passes(
         *passes = value + 6u;
         return DIC_STATUS_OK;
     }
-    status = dic_j2k_packet_reader_read_bits(reader, 7u, &value);
+    status = j2k_packet_reader_read_bits(reader, 7u, &value);
     if (status != DIC_STATUS_OK)
         return status;
     *passes = value + 37u;
     return *passes <= 164u ? DIC_STATUS_OK : DIC_J2K_FORMAT_ERROR;
 }
 
-static void dic_j2k_packet_parse_subband_state_free(dic_j2k_packet_parse_subband_state *subband)
+static void j2k_packet_parse_subband_state_free(j2k_packet_parse_subband_state *subband)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (subband == NULL)
         return;
     free(subband->codeblocks);
-    dic_j2k_packet_tagtree_free(&subband->inclusion_tree);
-    dic_j2k_packet_tagtree_free(&subband->zero_tree);
+    j2k_packet_tagtree_free(&subband->inclusion_tree);
+    j2k_packet_tagtree_free(&subband->zero_tree);
     subband->codeblocks = NULL;
     subband->blocks_x = 0;
     subband->blocks_y = 0;
 }
 
-void dic_j2k_packet_header_parser_destroy(dic_j2k_packet_header_parser *parser)
+void j2k_packet_header_parser_destroy(j2k_packet_header_parser *parser)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
 
     if (parser == NULL)
         return;
     for (index = 0u; index < parser->subband_count; ++index)
-        dic_j2k_packet_parse_subband_state_free(parser->subbands + index);
+        j2k_packet_parse_subband_state_free(parser->subbands + index);
     free(parser->subbands);
     free(parser);
 }
 
-dic_status dic_j2k_packet_header_parser_create(
-    const dic_j2k_packet_subband_layout *subbands,
+dic_status j2k_packet_header_parser_create(
+    const j2k_packet_subband_layout *subbands,
     size_t subband_count,
     int terminated_passes,
-    dic_j2k_packet_header_parser **parser
+    j2k_packet_header_parser **parser
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_packet_header_parser *created;
+    j2k_DEBUG_ENTER();
+    j2k_packet_header_parser *created;
     size_t subband_index;
     dic_status status = DIC_STATUS_OK;
 
     if (parser == NULL || subbands == NULL || subband_count == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
     *parser = NULL;
-    created = (dic_j2k_packet_header_parser *)calloc(1u, sizeof(created[0]));
+    created = (j2k_packet_header_parser *)calloc(1u, sizeof(created[0]));
     if (created == NULL)
         return DIC_STATUS_MEMORY_ERROR;
-    created->subbands = (dic_j2k_packet_parse_subband_state *)calloc(
+    created->subbands = (j2k_packet_parse_subband_state *)calloc(
         subband_count,
         sizeof(created->subbands[0])
     );
@@ -1000,7 +1000,7 @@ dic_status dic_j2k_packet_header_parser_create(
 
     for (subband_index = 0u; subband_index < subband_count; ++subband_index)
     {
-        dic_j2k_packet_parse_subband_state *state = created->subbands + subband_index;
+        j2k_packet_parse_subband_state *state = created->subbands + subband_index;
         size_t codeblock_count;
         size_t codeblock_index;
         int first_block_x;
@@ -1008,9 +1008,9 @@ dic_status dic_j2k_packet_header_parser_create(
         int packet_blocks_x;
         int packet_blocks_y;
 
-        dic_j2k_packet_tagtree_init(&state->inclusion_tree);
-        dic_j2k_packet_tagtree_init(&state->zero_tree);
-        status = dic_j2k_packet_layout_window(
+        j2k_packet_tagtree_init(&state->inclusion_tree);
+        j2k_packet_tagtree_init(&state->zero_tree);
+        status = j2k_packet_layout_window(
             subbands + subband_index,
             &first_block_x,
             &first_block_y,
@@ -1030,7 +1030,7 @@ dic_status dic_j2k_packet_header_parser_create(
         state->first_block_y = first_block_y;
         state->total_blocks_x = subbands[subband_index].blocks_x;
         codeblock_count = (size_t)state->blocks_x * (size_t)state->blocks_y;
-        state->codeblocks = (dic_j2k_packet_parse_codeblock_state *)calloc(
+        state->codeblocks = (j2k_packet_parse_codeblock_state *)calloc(
             codeblock_count,
             sizeof(state->codeblocks[0])
         );
@@ -1041,38 +1041,38 @@ dic_status dic_j2k_packet_header_parser_create(
         }
         for (codeblock_index = 0u; codeblock_index < codeblock_count; ++codeblock_index)
             state->codeblocks[codeblock_index].lblock = 3u;
-        status = dic_j2k_packet_tagtree_alloc(&state->inclusion_tree, state->blocks_x, state->blocks_y);
+        status = j2k_packet_tagtree_alloc(&state->inclusion_tree, state->blocks_x, state->blocks_y);
         if (status == DIC_STATUS_OK)
-            status = dic_j2k_packet_tagtree_alloc(&state->zero_tree, state->blocks_x, state->blocks_y);
+            status = j2k_packet_tagtree_alloc(&state->zero_tree, state->blocks_x, state->blocks_y);
         if (status != DIC_STATUS_OK)
             break;
     }
     if (status != DIC_STATUS_OK)
     {
-        dic_j2k_packet_header_parser_destroy(created);
+        j2k_packet_header_parser_destroy(created);
         return status;
     }
     *parser = created;
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_j2k_packet_header_parser_parse_codeblock(
-    dic_j2k_packet_header_parser *parser,
-    dic_j2k_packet_parse_subband_state *subband,
+static dic_status j2k_packet_header_parser_parse_codeblock(
+    j2k_packet_header_parser *parser,
+    j2k_packet_parse_subband_state *subband,
     size_t subband_index,
     int bx,
     int by,
     uint16_t layer_index,
-    dic_j2k_packet_bit_reader *reader,
-    dic_j2k_packet_parse_result *result,
-    dic_j2k_packet_pending_range_list *pending
+    j2k_packet_bit_reader *reader,
+    j2k_packet_parse_result *result,
+    j2k_packet_pending_range_list *pending
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t codeblock_index = (size_t)by * (size_t)subband->blocks_x + (size_t)bx;
     size_t absolute_codeblock_index = (size_t)(subband->first_block_y + by) * (size_t)subband->total_blocks_x
         + (size_t)(subband->first_block_x + bx);
-    dic_j2k_packet_parse_codeblock_state *codeblock = subband->codeblocks + codeblock_index;
+    j2k_packet_parse_codeblock_state *codeblock = subband->codeblocks + codeblock_index;
     int first_inclusion = codeblock->coding_passes == 0u;
     uint32_t included = 0u;
     dic_status status;
@@ -1082,7 +1082,7 @@ static dic_status dic_j2k_packet_header_parser_parse_codeblock(
         int known;
         uint32_t value;
 
-        status = dic_j2k_packet_tagtree_decode_leaf(
+        status = j2k_packet_tagtree_decode_leaf(
             &subband->inclusion_tree,
             bx,
             by,
@@ -1097,7 +1097,7 @@ static dic_status dic_j2k_packet_header_parser_parse_codeblock(
     }
     else
     {
-        status = dic_j2k_packet_reader_read_bit(reader, &included);
+        status = j2k_packet_reader_read_bit(reader, &included);
         if (status != DIC_STATUS_OK)
             return status;
     }
@@ -1105,7 +1105,7 @@ static dic_status dic_j2k_packet_header_parser_parse_codeblock(
         return DIC_STATUS_OK;
     if (first_inclusion)
     {
-        status = dic_j2k_packet_tagtree_decode_value(
+        status = j2k_packet_tagtree_decode_value(
             &subband->zero_tree,
             bx,
             by,
@@ -1120,14 +1120,14 @@ static dic_status dic_j2k_packet_header_parser_parse_codeblock(
         uint32_t lblock_increment = 0u;
         uint32_t pass;
 
-        status = dic_j2k_packet_header_parse_coding_passes(reader, &pass_count);
+        status = j2k_packet_header_parse_coding_passes(reader, &pass_count);
         if (status != DIC_STATUS_OK)
             return status;
         do
         {
             uint32_t bit;
 
-            status = dic_j2k_packet_reader_read_bit(reader, &bit);
+            status = j2k_packet_reader_read_bit(reader, &bit);
             if (status != DIC_STATUS_OK)
                 return status;
             if (bit == 0u)
@@ -1148,12 +1148,12 @@ static dic_status dic_j2k_packet_header_parser_parse_codeblock(
             size_t range_index;
             uint32_t length_bits = parser->terminated_passes
                 ? codeblock->lblock
-                : codeblock->lblock + dic_j2k_packet_floor_log2(pass_count);
+                : codeblock->lblock + j2k_packet_floor_log2(pass_count);
 
-            status = dic_j2k_packet_reader_read_bits(reader, length_bits, &length_value);
+            status = j2k_packet_reader_read_bits(reader, length_bits, &length_value);
             if (status != DIC_STATUS_OK)
                 return status;
-            status = dic_j2k_packet_parse_result_push_range(
+            status = j2k_packet_parse_result_push_range(
                 result,
                 subband_index,
                 absolute_codeblock_index,
@@ -1163,7 +1163,7 @@ static dic_status dic_j2k_packet_header_parser_parse_codeblock(
             );
             if (status != DIC_STATUS_OK)
                 return status;
-            status = dic_j2k_packet_pending_range_list_push(pending, range_index, length_value);
+            status = j2k_packet_pending_range_list_push(pending, range_index, length_value);
             if (status != DIC_STATUS_OK)
                 return status;
             if (!parser->terminated_passes)
@@ -1174,17 +1174,17 @@ static dic_status dic_j2k_packet_header_parser_parse_codeblock(
     return DIC_STATUS_OK;
 }
 
-dic_status dic_j2k_packet_header_parser_parse(
-    dic_j2k_packet_header_parser *parser,
+dic_status j2k_packet_header_parser_parse(
+    j2k_packet_header_parser *parser,
     const uint8_t *payload,
     size_t payload_size,
     uint16_t layer_index,
-    dic_j2k_packet_parse_result *result
+    j2k_packet_parse_result *result
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_packet_bit_reader reader;
-    dic_j2k_packet_pending_range_list pending = {0};
+    j2k_DEBUG_ENTER();
+    j2k_packet_bit_reader reader;
+    j2k_packet_pending_range_list pending = {0};
     size_t subband_index;
     size_t pending_index;
     size_t body_offset;
@@ -1193,10 +1193,10 @@ dic_status dic_j2k_packet_header_parser_parse(
 
     if (parser == NULL || result == NULL || (payload == NULL && payload_size > 0u))
         return DIC_STATUS_INVALID_ARGUMENT;
-    dic_j2k_packet_parse_result_free(result);
-    dic_j2k_packet_parse_result_init(result);
-    dic_j2k_packet_bit_reader_init(&reader, payload, payload_size);
-    status = dic_j2k_packet_reader_read_bit(&reader, &nonempty);
+    j2k_packet_parse_result_free(result);
+    j2k_packet_parse_result_init(result);
+    j2k_packet_bit_reader_init(&reader, payload, payload_size);
+    status = j2k_packet_reader_read_bit(&reader, &nonempty);
     if (status != DIC_STATUS_OK)
         return status;
     result->is_empty = nonempty == 0u;
@@ -1204,7 +1204,7 @@ dic_status dic_j2k_packet_header_parser_parse(
     {
         for (subband_index = 0u; subband_index < parser->subband_count && status == DIC_STATUS_OK; ++subband_index)
         {
-            dic_j2k_packet_parse_subband_state *subband = parser->subbands + subband_index;
+            j2k_packet_parse_subband_state *subband = parser->subbands + subband_index;
             int by;
 
             for (by = 0; by < subband->blocks_y && status == DIC_STATUS_OK; ++by)
@@ -1213,7 +1213,7 @@ dic_status dic_j2k_packet_header_parser_parse(
 
                 for (bx = 0; bx < subband->blocks_x && status == DIC_STATUS_OK; ++bx)
                 {
-                    status = dic_j2k_packet_header_parser_parse_codeblock(
+                    status = j2k_packet_header_parser_parse_codeblock(
                         parser,
                         subband,
                         subband_index,
@@ -1230,14 +1230,14 @@ dic_status dic_j2k_packet_header_parser_parse(
     }
     if (status == DIC_STATUS_OK)
     {
-        result->packet_header_size = dic_j2k_packet_reader_aligned_offset(&reader);
+        result->packet_header_size = j2k_packet_reader_aligned_offset(&reader);
         body_offset = result->packet_header_size;
         if (body_offset > payload_size)
             status = DIC_J2K_FORMAT_ERROR;
     }
     for (pending_index = 0u; status == DIC_STATUS_OK && pending_index < pending.count; ++pending_index)
     {
-        dic_j2k_packet_pending_range *item = pending.items + pending_index;
+        j2k_packet_pending_range *item = pending.items + pending_index;
 
         if (item->length > payload_size - body_offset)
         {
@@ -1249,73 +1249,73 @@ dic_status dic_j2k_packet_header_parser_parse(
     }
     if (status == DIC_STATUS_OK)
         result->packet_body_size = body_offset - result->packet_header_size;
-    dic_j2k_packet_pending_range_list_free(&pending);
+    j2k_packet_pending_range_list_free(&pending);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.6 Table B.4, packet headers use variable codewords for the number of coding passes. */
-static dic_status dic_j2k_packet_header_append_coding_passes(
-    dic_j2k_packet_header *header,
+static dic_status j2k_packet_header_append_coding_passes(
+    j2k_packet_header *header,
     uint32_t coding_passes
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     dic_status status;
 
     if (header == NULL || coding_passes == 0u || coding_passes > 164u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     if (coding_passes == 1u)
-        return dic_j2k_packet_header_append_bit(header, 0u);
+        return j2k_packet_header_append_bit(header, 0u);
     if (coding_passes == 2u)
     {
-        status = dic_j2k_packet_header_append_bit(header, 1u);
+        status = j2k_packet_header_append_bit(header, 1u);
         if (status != DIC_STATUS_OK)
             return status;
-        return dic_j2k_packet_header_append_bit(header, 0u);
+        return j2k_packet_header_append_bit(header, 0u);
     }
     if (coding_passes <= 5u)
     {
-        status = dic_j2k_packet_header_append_bits(header, 0xcu | (coding_passes - 3u), 4u);
+        status = j2k_packet_header_append_bits(header, 0xcu | (coding_passes - 3u), 4u);
         return status;
     }
     if (coding_passes <= 36u)
     {
-        status = dic_j2k_packet_header_append_bits(header, 0xfu, 4u);
+        status = j2k_packet_header_append_bits(header, 0xfu, 4u);
         if (status != DIC_STATUS_OK)
             return status;
-        return dic_j2k_packet_header_append_bits(header, coding_passes - 6u, 5u);
+        return j2k_packet_header_append_bits(header, coding_passes - 6u, 5u);
     }
 
-    status = dic_j2k_packet_header_append_bits(header, 0x1ffu, 9u);
+    status = j2k_packet_header_append_bits(header, 0x1ffu, 9u);
     if (status != DIC_STATUS_OK)
         return status;
-    return dic_j2k_packet_header_append_bits(header, coding_passes - 37u, 7u);
+    return j2k_packet_header_append_bits(header, coding_passes - 37u, 7u);
 }
 
-static dic_status dic_j2k_packet_header_append_codeblock_body(
-    dic_j2k_packet_header *header,
-    const dic_j2k_packet_codeblock *codeblock
+static dic_status j2k_packet_header_append_codeblock_body(
+    j2k_packet_header *header,
+    const j2k_packet_codeblock *codeblock
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t lblock_bits;
     dic_status status;
 
     if (codeblock->lblock == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_packet_header_append_coding_passes(header, codeblock->coding_passes);
+    status = j2k_packet_header_append_coding_passes(header, codeblock->coding_passes);
     if (status != DIC_STATUS_OK)
         return status;
 
     for (lblock_bits = 0u; lblock_bits < codeblock->lblock_increment; ++lblock_bits)
     {
-        status = dic_j2k_packet_header_append_bit(header, 1u);
+        status = j2k_packet_header_append_bit(header, 1u);
         if (status != DIC_STATUS_OK)
             return status;
     }
-    status = dic_j2k_packet_header_append_bit(header, 0u);
+    status = j2k_packet_header_append_bit(header, 0u);
     if (status != DIC_STATUS_OK)
         return status;
 
@@ -1330,7 +1330,7 @@ static dic_status dic_j2k_packet_header_append_codeblock_body(
                 return DIC_STATUS_INVALID_ARGUMENT;
             if (lblock_bits > 31u)
                 return DIC_STATUS_INVALID_ARGUMENT;
-            status = dic_j2k_packet_header_append_bits(
+            status = j2k_packet_header_append_bits(
                 header,
                 (uint32_t)codeblock->segment_lengths[segment],
                 lblock_bits
@@ -1343,22 +1343,22 @@ static dic_status dic_j2k_packet_header_append_codeblock_body(
 
     lblock_bits = codeblock->lblock
         + codeblock->lblock_increment
-        + dic_j2k_packet_floor_log2(codeblock->coding_passes);
+        + j2k_packet_floor_log2(codeblock->coding_passes);
     if (lblock_bits > 31u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    return dic_j2k_packet_header_append_bits(header, codeblock->codeword_length, lblock_bits);
+    return j2k_packet_header_append_bits(header, codeblock->codeword_length, lblock_bits);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.7.2, Lblock is incremented once before signalling all terminated segment lengths. */
-static dic_status dic_j2k_packet_calculate_segment_lblock_increment(
+static dic_status j2k_packet_calculate_segment_lblock_increment(
     uint32_t current_lblock,
     const size_t *segment_lengths,
     uint32_t segment_count,
     uint32_t *increment
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t segment;
     uint32_t required_lblock = current_lblock;
 
@@ -1371,7 +1371,7 @@ static dic_status dic_j2k_packet_calculate_segment_lblock_increment(
 
         if (segment_lengths[segment] > UINT32_MAX)
             return DIC_STATUS_INVALID_ARGUMENT;
-        required_bits = dic_j2k_packet_bit_width((uint32_t)segment_lengths[segment]);
+        required_bits = j2k_packet_bit_width((uint32_t)segment_lengths[segment]);
         if (required_bits > required_lblock)
             required_lblock = required_bits;
     }
@@ -1381,21 +1381,21 @@ static dic_status dic_j2k_packet_calculate_segment_lblock_increment(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.7.1 Equation B-19, length bits are Lblock plus floor(log2(coding passes added)). */
-dic_status dic_j2k_packet_calculate_lblock_increment(
+dic_status j2k_packet_calculate_lblock_increment(
     uint32_t current_lblock,
     uint32_t coding_passes,
     uint32_t codeword_length,
     uint32_t *increment
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t pass_bits;
     uint32_t required_bits;
 
     if (increment == NULL || current_lblock == 0u || coding_passes == 0u || coding_passes > 164u)
         return DIC_STATUS_INVALID_ARGUMENT;
-    pass_bits = dic_j2k_packet_floor_log2(coding_passes);
-    required_bits = dic_j2k_packet_bit_width(codeword_length);
+    pass_bits = j2k_packet_floor_log2(coding_passes);
+    required_bits = j2k_packet_bit_width(codeword_length);
     if (required_bits <= current_lblock + pass_bits)
     {
         *increment = 0u;
@@ -1406,21 +1406,21 @@ dic_status dic_j2k_packet_calculate_lblock_increment(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.4-B.10.7, a first-in-layer code-block contributes inclusion, zero bit-plane, pass count, Lblock, and length fields. */
-dic_status dic_j2k_packet_prepare_codeblock(
-    dic_j2k_packet_codeblock *codeblock,
+dic_status j2k_packet_prepare_codeblock(
+    j2k_packet_codeblock *codeblock,
     uint32_t zero_bitplanes,
     uint32_t coding_passes,
     uint32_t codeword_length
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     dic_status status;
     uint32_t increment;
 
     if (codeblock == NULL || coding_passes == 0u || coding_passes > 164u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_packet_calculate_lblock_increment(
+    status = j2k_packet_calculate_lblock_increment(
         3u,
         coding_passes,
         codeword_length,
@@ -1441,31 +1441,31 @@ dic_status dic_j2k_packet_prepare_codeblock(
     return DIC_STATUS_OK;
 }
 
-static uint32_t dic_j2k_packet_layer_pass_boundary(
+static uint32_t j2k_packet_layer_pass_boundary(
     uint32_t coding_passes,
     uint16_t layer_index,
     uint16_t layers
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     return (uint32_t)(((uint64_t)coding_passes * (uint64_t)layer_index) / (uint64_t)layers);
 }
 
-static int dic_j2k_packet_stream_has_rd_slopes(const dic_j2k_codeblock_stream *stream)
+static int j2k_packet_stream_has_rd_slopes(const j2k_codeblock_stream *stream)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     return stream != NULL
         && stream->pass_lengths != NULL
         && stream->pass_rd_slopes != NULL
         && stream->coding_passes > 0u;
 }
 
-static size_t dic_j2k_packet_rd_total_bytes(
-    const dic_j2k_packet_subband_payload *subbands,
+static size_t j2k_packet_rd_total_bytes(
+    const j2k_packet_subband_payload *subbands,
     size_t subband_count
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t subband_index;
     size_t total = 0u;
 
@@ -1483,15 +1483,15 @@ static size_t dic_j2k_packet_rd_total_bytes(
     return total;
 }
 
-static uint32_t dic_j2k_packet_rd_passes_at_slope(
-    const dic_j2k_codeblock_stream *stream,
+static uint32_t j2k_packet_rd_passes_at_slope(
+    const j2k_codeblock_stream *stream,
     double threshold
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t pass;
 
-    if (!dic_j2k_packet_stream_has_rd_slopes(stream))
+    if (!j2k_packet_stream_has_rd_slopes(stream))
         return 0u;
     for (pass = 0u; pass < stream->coding_passes; ++pass)
     {
@@ -1501,13 +1501,13 @@ static uint32_t dic_j2k_packet_rd_passes_at_slope(
     return pass;
 }
 
-static size_t dic_j2k_packet_rd_selected_bytes(
-    const dic_j2k_packet_subband_payload *subbands,
+static size_t j2k_packet_rd_selected_bytes(
+    const j2k_packet_subband_payload *subbands,
     size_t subband_count,
     double threshold
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t subband_index;
     size_t total = 0u;
 
@@ -1521,8 +1521,8 @@ static size_t dic_j2k_packet_rd_selected_bytes(
             continue;
         for (index = 0u; index < subbands[subband_index].stream_count; ++index)
         {
-            const dic_j2k_codeblock_stream *stream = subbands[subband_index].streams + index;
-            uint32_t pass_count = dic_j2k_packet_rd_passes_at_slope(stream, threshold);
+            const j2k_codeblock_stream *stream = subbands[subband_index].streams + index;
+            uint32_t pass_count = j2k_packet_rd_passes_at_slope(stream, threshold);
             uint32_t pass;
 
             for (pass = 0u; pass < pass_count; ++pass)
@@ -1533,15 +1533,15 @@ static size_t dic_j2k_packet_rd_selected_bytes(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.8, a layer boundary is formed by selecting code-block truncation points with an RD slope threshold. */
-static uint32_t dic_j2k_packet_rd_layer_pass_boundary(
-    const dic_j2k_packet_subband_payload *subbands,
+static uint32_t j2k_packet_rd_layer_pass_boundary(
+    const j2k_packet_subband_payload *subbands,
     size_t subband_count,
-    const dic_j2k_codeblock_stream *stream,
+    const j2k_codeblock_stream *stream,
     uint16_t layer_index,
     uint16_t layers
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t total_bytes;
     size_t target_bytes;
     size_t subband_index;
@@ -1556,10 +1556,10 @@ static uint32_t dic_j2k_packet_rd_layer_pass_boundary(
         return 0u;
     if (layer_index >= layers)
         return stream->coding_passes;
-    if (!dic_j2k_packet_stream_has_rd_slopes(stream))
-        return dic_j2k_packet_layer_pass_boundary(stream->coding_passes, layer_index, layers);
+    if (!j2k_packet_stream_has_rd_slopes(stream))
+        return j2k_packet_layer_pass_boundary(stream->coding_passes, layer_index, layers);
 
-    total_bytes = dic_j2k_packet_rd_total_bytes(subbands, subband_count);
+    total_bytes = j2k_packet_rd_total_bytes(subbands, subband_count);
     if (total_bytes == 0u)
         return 0u;
     target_bytes = (size_t)(((uint64_t)total_bytes * (uint64_t)layer_index) / (uint64_t)layers);
@@ -1574,10 +1574,10 @@ static uint32_t dic_j2k_packet_rd_layer_pass_boundary(
             continue;
         for (index = 0u; index < subbands[subband_index].stream_count; ++index)
         {
-            const dic_j2k_codeblock_stream *candidate = subbands[subband_index].streams + index;
+            const j2k_codeblock_stream *candidate = subbands[subband_index].streams + index;
             uint32_t pass;
 
-            if (!dic_j2k_packet_stream_has_rd_slopes(candidate))
+            if (!j2k_packet_stream_has_rd_slopes(candidate))
                 continue;
             for (pass = 0u; pass < candidate->coding_passes; ++pass)
             {
@@ -1587,32 +1587,32 @@ static uint32_t dic_j2k_packet_rd_layer_pass_boundary(
         }
     }
     if (max_slope <= 0.0)
-        return dic_j2k_packet_layer_pass_boundary(stream->coding_passes, layer_index, layers);
+        return j2k_packet_layer_pass_boundary(stream->coding_passes, layer_index, layers);
 
     high = max_slope + 1.0;
     for (iteration = 0u; iteration < 48u; ++iteration)
     {
         double mid = (low + high) * 0.5;
-        size_t selected = dic_j2k_packet_rd_selected_bytes(subbands, subband_count, mid);
+        size_t selected = j2k_packet_rd_selected_bytes(subbands, subband_count, mid);
 
         if (selected > target_bytes)
             low = mid;
         else
             high = mid;
     }
-    return dic_j2k_packet_rd_passes_at_slope(stream, high);
+    return j2k_packet_rd_passes_at_slope(stream, high);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.7, terminated coding-pass segment lengths define legal truncation byte offsets. */
-static dic_status dic_j2k_packet_codeblock_pass_range(
-    const dic_j2k_codeblock_stream *stream,
+static dic_status j2k_packet_codeblock_pass_range(
+    const j2k_codeblock_stream *stream,
     uint32_t start_pass,
     uint32_t pass_count,
     size_t *byte_offset,
     size_t *byte_length
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t pass;
 
     if (stream == NULL || byte_offset == NULL || byte_length == NULL)
@@ -1640,16 +1640,16 @@ static dic_status dic_j2k_packet_codeblock_pass_range(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.7.1, Lblock persists for a code-block across layer contributions. */
-static dic_status dic_j2k_packet_lblock_before_layer(
-    const dic_j2k_packet_subband_payload *subbands,
+static dic_status j2k_packet_lblock_before_layer(
+    const j2k_packet_subband_payload *subbands,
     size_t subband_count,
-    const dic_j2k_codeblock_stream *stream,
+    const j2k_codeblock_stream *stream,
     uint16_t layer_index,
     uint16_t layers,
     uint32_t *lblock
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint16_t layer;
     uint32_t current_lblock = 3u;
 
@@ -1658,8 +1658,8 @@ static dic_status dic_j2k_packet_lblock_before_layer(
 
     for (layer = 0u; layer < layer_index; ++layer)
     {
-        uint32_t start_pass = dic_j2k_packet_rd_layer_pass_boundary(subbands, subband_count, stream, layer, layers);
-        uint32_t end_pass = dic_j2k_packet_rd_layer_pass_boundary(subbands, subband_count, stream, (uint16_t)(layer + 1u), layers);
+        uint32_t start_pass = j2k_packet_rd_layer_pass_boundary(subbands, subband_count, stream, layer, layers);
+        uint32_t end_pass = j2k_packet_rd_layer_pass_boundary(subbands, subband_count, stream, (uint16_t)(layer + 1u), layers);
         uint32_t pass_count = end_pass - start_pass;
         size_t byte_offset;
         size_t byte_length;
@@ -1668,13 +1668,13 @@ static dic_status dic_j2k_packet_lblock_before_layer(
 
         if (pass_count == 0u)
             continue;
-        status = dic_j2k_packet_codeblock_pass_range(stream, start_pass, pass_count, &byte_offset, &byte_length);
+        status = j2k_packet_codeblock_pass_range(stream, start_pass, pass_count, &byte_offset, &byte_length);
         if (status != DIC_STATUS_OK)
             return status;
         (void)byte_offset;
         if (stream->pass_lengths != NULL)
         {
-            status = dic_j2k_packet_calculate_segment_lblock_increment(
+            status = j2k_packet_calculate_segment_lblock_increment(
                 current_lblock,
                 stream->pass_lengths + start_pass,
                 pass_count,
@@ -1683,7 +1683,7 @@ static dic_status dic_j2k_packet_lblock_before_layer(
         }
         else
         {
-            status = dic_j2k_packet_calculate_lblock_increment(
+            status = j2k_packet_calculate_lblock_increment(
                 current_lblock,
                 pass_count,
                 (uint32_t)byte_length,
@@ -1700,12 +1700,12 @@ static dic_status dic_j2k_packet_lblock_before_layer(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.8, packet headers order inclusion, zero bit-planes, coding passes, Lblock, and codeword lengths. */
-dic_status dic_j2k_packet_header_append_codeblock(
-    dic_j2k_packet_header *header,
-    const dic_j2k_packet_codeblock *codeblock
+dic_status j2k_packet_header_append_codeblock(
+    j2k_packet_header *header,
+    const j2k_packet_codeblock *codeblock
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     dic_status status;
 
     if (header == NULL || codeblock == NULL)
@@ -1713,13 +1713,13 @@ dic_status dic_j2k_packet_header_append_codeblock(
     if (codeblock->coding_passes > 164u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_packet_header_append_bit(header, codeblock->included ? 1u : 0u);
+    status = j2k_packet_header_append_bit(header, codeblock->included ? 1u : 0u);
     if (status != DIC_STATUS_OK || !codeblock->included)
         return status;
 
     if (codeblock->first_inclusion)
     {
-        status = dic_j2k_packet_header_append_unary_zeros_then_one(
+        status = j2k_packet_header_append_unary_zeros_then_one(
             header,
             codeblock->zero_bitplanes
         );
@@ -1727,19 +1727,19 @@ dic_status dic_j2k_packet_header_append_codeblock(
             return status;
     }
 
-    return dic_j2k_packet_header_append_codeblock_body(header, codeblock);
+    return j2k_packet_header_append_codeblock_body(header, codeblock);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10 and B.10.8, packet data consists of a packet header followed by codeword bytes. */
-dic_status dic_j2k_packet_build_single_codeblock_payload(
-    const dic_j2k_packet_codeblock *codeblock,
+dic_status j2k_packet_build_single_codeblock_payload(
+    const j2k_packet_codeblock *codeblock,
     const uint8_t *codeword,
     size_t codeword_size,
-    dic_j2k_packet_header *payload
+    j2k_packet_header *payload
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_packet_codeblock_payload contribution;
+    j2k_DEBUG_ENTER();
+    j2k_packet_codeblock_payload contribution;
 
     if (codeblock == NULL || payload == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -1749,17 +1749,17 @@ dic_status dic_j2k_packet_build_single_codeblock_payload(
     contribution.header = *codeblock;
     contribution.codeword = codeword;
     contribution.codeword_size = codeword_size;
-    return dic_j2k_packet_build_codeblock_payload(&contribution, 1u, payload);
+    return j2k_packet_build_codeblock_payload(&contribution, 1u, payload);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.8, packet data is one header followed by included code-block contributions in scan order. */
-dic_status dic_j2k_packet_build_codeblock_payload(
-    const dic_j2k_packet_codeblock_payload *codeblocks,
+dic_status j2k_packet_build_codeblock_payload(
+    const j2k_packet_codeblock_payload *codeblocks,
     size_t codeblock_count,
-    dic_j2k_packet_header *payload
+    j2k_packet_header *payload
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
     int nonempty = 0;
     dic_status status;
@@ -1767,8 +1767,8 @@ dic_status dic_j2k_packet_build_codeblock_payload(
     if (payload == NULL || (codeblocks == NULL && codeblock_count > 0u))
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    dic_j2k_packet_header_free(payload);
-    dic_j2k_packet_header_init(payload);
+    j2k_packet_header_free(payload);
+    j2k_packet_header_init(payload);
 
     for (index = 0u; index < codeblock_count; ++index)
     {
@@ -1779,32 +1779,32 @@ dic_status dic_j2k_packet_build_codeblock_payload(
         }
     }
 
-    status = dic_j2k_packet_header_append_bit(payload, nonempty ? 1u : 0u);
+    status = j2k_packet_header_append_bit(payload, nonempty ? 1u : 0u);
     if (status == DIC_STATUS_OK && nonempty)
     {
         for (index = 0u; index < codeblock_count; ++index)
         {
             if (codeblocks[index].codeword_size > 0u && codeblocks[index].codeword == NULL)
             {
-                dic_j2k_packet_header_free(payload);
+                j2k_packet_header_free(payload);
                 return DIC_STATUS_INVALID_ARGUMENT;
             }
             if (codeblocks[index].header.included
                 && codeblocks[index].header.codeword_length != codeblocks[index].codeword_size)
             {
-                dic_j2k_packet_header_free(payload);
+                j2k_packet_header_free(payload);
                 return DIC_STATUS_INVALID_ARGUMENT;
             }
-            status = dic_j2k_packet_header_append_codeblock(payload, &codeblocks[index].header);
+            status = j2k_packet_header_append_codeblock(payload, &codeblocks[index].header);
             if (status != DIC_STATUS_OK)
                 break;
         }
     }
     if (status == DIC_STATUS_OK)
-        status = dic_j2k_packet_header_finish(payload);
+        status = j2k_packet_header_finish(payload);
     if (status != DIC_STATUS_OK)
     {
-        dic_j2k_packet_header_free(payload);
+        j2k_packet_header_free(payload);
         return status;
     }
 
@@ -1812,10 +1812,10 @@ dic_status dic_j2k_packet_build_codeblock_payload(
     {
         if (!codeblocks[index].header.included)
             continue;
-        status = dic_j2k_packet_reserve(payload, codeblocks[index].codeword_size);
+        status = j2k_packet_reserve(payload, codeblocks[index].codeword_size);
         if (status != DIC_STATUS_OK)
         {
-            dic_j2k_packet_header_free(payload);
+            j2k_packet_header_free(payload);
             return status;
         }
         if (codeblocks[index].codeword_size > 0u)
@@ -1829,21 +1829,21 @@ dic_status dic_j2k_packet_build_codeblock_payload(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.5-B.10.8 and Annex D.3, EBCOT code-block streams provide zero bit-planes, pass count, and codeword bytes for packetization. */
-dic_status dic_j2k_packet_build_ebcot_payload(
-    const dic_j2k_codeblock_stream *streams,
+dic_status j2k_packet_build_ebcot_payload(
+    const j2k_codeblock_stream *streams,
     size_t stream_count,
-    dic_j2k_packet_header *payload
+    j2k_packet_header *payload
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_packet_codeblock_payload *contributions;
+    j2k_DEBUG_ENTER();
+    j2k_packet_codeblock_payload *contributions;
     size_t index;
     dic_status status;
 
     if (payload == NULL || (streams == NULL && stream_count > 0u))
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    contributions = (dic_j2k_packet_codeblock_payload *)calloc(
+    contributions = (j2k_packet_codeblock_payload *)calloc(
         stream_count == 0u ? 1u : stream_count,
         sizeof(contributions[0])
     );
@@ -1858,7 +1858,7 @@ dic_status dic_j2k_packet_build_ebcot_payload(
             continue;
         }
 
-        status = dic_j2k_packet_prepare_codeblock(
+        status = j2k_packet_prepare_codeblock(
             &contributions[index].header,
             streams[index].zero_bitplanes,
             streams[index].coding_passes,
@@ -1873,23 +1873,23 @@ dic_status dic_j2k_packet_build_ebcot_payload(
         contributions[index].codeword_size = streams[index].mq.byte_count;
     }
 
-    status = dic_j2k_packet_build_codeblock_payload(contributions, stream_count, payload);
+    status = j2k_packet_build_codeblock_payload(contributions, stream_count, payload);
     free(contributions);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.4-B.10.8, first inclusion and missing most-significant bit-planes are signalled by one tag tree per precinct sub-band. */
-dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
-    const dic_j2k_packet_subband_payload *subbands,
+dic_status j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
+    const j2k_packet_subband_payload *subbands,
     size_t subband_count,
     uint16_t layer_index,
     uint16_t layers,
-    dic_j2k_packet_header *payload,
+    j2k_packet_header *payload,
     size_t *packet_header_size
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_packet_codeblock_payload **prepared = NULL;
+    j2k_DEBUG_ENTER();
+    j2k_packet_codeblock_payload **prepared = NULL;
     size_t subband_index;
     int nonempty = 0;
     dic_status status = DIC_STATUS_OK;
@@ -1900,7 +1900,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
         return DIC_STATUS_INVALID_ARGUMENT;
     }
 
-    prepared = (dic_j2k_packet_codeblock_payload **)calloc(
+    prepared = (j2k_packet_codeblock_payload **)calloc(
         subband_count == 0u ? 1u : subband_count,
         sizeof(prepared[0])
     );
@@ -1909,7 +1909,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
 
     for (subband_index = 0u; subband_index < subband_count; ++subband_index)
     {
-        const dic_j2k_packet_subband_payload *subband = subbands + subband_index;
+        const j2k_packet_subband_payload *subband = subbands + subband_index;
         int first_block_x;
         int first_block_y;
         int packet_blocks_x;
@@ -1917,7 +1917,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
         int by;
         size_t packet_stream_count;
 
-        status = dic_j2k_packet_payload_window(
+        status = j2k_packet_payload_window(
             subband,
             &first_block_x,
             &first_block_y,
@@ -1938,7 +1938,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
         (void)first_block_y;
         packet_stream_count = (size_t)packet_blocks_x * (size_t)packet_blocks_y;
 
-        prepared[subband_index] = (dic_j2k_packet_codeblock_payload *)calloc(
+        prepared[subband_index] = (j2k_packet_codeblock_payload *)calloc(
             packet_stream_count == 0u ? 1u : packet_stream_count,
             sizeof(prepared[subband_index][0])
         );
@@ -1955,10 +1955,10 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
             for (bx = 0; bx < packet_blocks_x; ++bx)
             {
                 size_t index = (size_t)by * (size_t)packet_blocks_x + (size_t)bx;
-                size_t stream_index = dic_j2k_packet_payload_stream_index(subband, bx, by);
-                const dic_j2k_codeblock_stream *stream = subband->streams + stream_index;
-                uint32_t start_pass = dic_j2k_packet_rd_layer_pass_boundary(subbands, subband_count, stream, layer_index, layers);
-                uint32_t end_pass = dic_j2k_packet_rd_layer_pass_boundary(subbands, subband_count, stream, (uint16_t)(layer_index + 1u), layers);
+                size_t stream_index = j2k_packet_payload_stream_index(subband, bx, by);
+                const j2k_codeblock_stream *stream = subband->streams + stream_index;
+                uint32_t start_pass = j2k_packet_rd_layer_pass_boundary(subbands, subband_count, stream, layer_index, layers);
+                uint32_t end_pass = j2k_packet_rd_layer_pass_boundary(subbands, subband_count, stream, (uint16_t)(layer_index + 1u), layers);
                 uint32_t pass_count = end_pass - start_pass;
                 uint32_t current_lblock;
                 uint32_t increment;
@@ -1971,7 +1971,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
                     prepared[subband_index][index].header.first_inclusion = start_pass == 0u ? 1 : 0;
                     continue;
                 }
-                status = dic_j2k_packet_codeblock_pass_range(
+                status = j2k_packet_codeblock_pass_range(
                     stream,
                     start_pass,
                     pass_count,
@@ -1985,7 +1985,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
                     status = DIC_STATUS_INVALID_ARGUMENT;
                     break;
                 }
-                status = dic_j2k_packet_lblock_before_layer(
+                status = j2k_packet_lblock_before_layer(
                     subbands,
                     subband_count,
                     stream,
@@ -1997,7 +1997,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
                     break;
                 if (stream->pass_lengths != NULL)
                 {
-                    status = dic_j2k_packet_calculate_segment_lblock_increment(
+                    status = j2k_packet_calculate_segment_lblock_increment(
                         current_lblock,
                         stream->pass_lengths + start_pass,
                         pass_count,
@@ -2006,7 +2006,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
                 }
                 else
                 {
-                    status = dic_j2k_packet_calculate_lblock_increment(
+                    status = j2k_packet_calculate_lblock_increment(
                         current_lblock,
                         pass_count,
                         (uint32_t)byte_length,
@@ -2037,27 +2037,27 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
 
     if (status == DIC_STATUS_OK)
     {
-        dic_j2k_packet_header_free(payload);
-        dic_j2k_packet_header_init(payload);
-        status = dic_j2k_packet_header_append_bit(payload, nonempty ? 1u : 0u);
+        j2k_packet_header_free(payload);
+        j2k_packet_header_init(payload);
+        status = j2k_packet_header_append_bit(payload, nonempty ? 1u : 0u);
     }
 
     if (status == DIC_STATUS_OK && nonempty)
     {
         for (subband_index = 0u; subband_index < subband_count && status == DIC_STATUS_OK; ++subband_index)
         {
-            const dic_j2k_packet_subband_payload *subband = subbands + subband_index;
-            dic_j2k_packet_tagtree inclusion_tree;
-            dic_j2k_packet_tagtree zero_tree;
+            const j2k_packet_subband_payload *subband = subbands + subband_index;
+            j2k_packet_tagtree inclusion_tree;
+            j2k_packet_tagtree zero_tree;
             int first_block_x;
             int first_block_y;
             int packet_blocks_x;
             int packet_blocks_y;
             int by;
 
-            dic_j2k_packet_tagtree_init(&inclusion_tree);
-            dic_j2k_packet_tagtree_init(&zero_tree);
-            status = dic_j2k_packet_payload_window(
+            j2k_packet_tagtree_init(&inclusion_tree);
+            j2k_packet_tagtree_init(&zero_tree);
+            status = j2k_packet_payload_window(
                 subband,
                 &first_block_x,
                 &first_block_y,
@@ -2067,9 +2067,9 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
             (void)first_block_x;
             (void)first_block_y;
             if (status == DIC_STATUS_OK)
-                status = dic_j2k_packet_tagtree_alloc(&inclusion_tree, packet_blocks_x, packet_blocks_y);
+                status = j2k_packet_tagtree_alloc(&inclusion_tree, packet_blocks_x, packet_blocks_y);
             if (status == DIC_STATUS_OK)
-                status = dic_j2k_packet_tagtree_alloc(&zero_tree, packet_blocks_x, packet_blocks_y);
+                status = j2k_packet_tagtree_alloc(&zero_tree, packet_blocks_x, packet_blocks_y);
 
             for (by = 0; by < packet_blocks_y && status == DIC_STATUS_OK; ++by)
             {
@@ -2078,9 +2078,9 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
                 for (bx = 0; bx < packet_blocks_x; ++bx)
                 {
                     size_t index = (size_t)by * (size_t)packet_blocks_x + (size_t)bx;
-                    const dic_j2k_packet_codeblock *header = &prepared[subband_index][index].header;
+                    const j2k_packet_codeblock *header = &prepared[subband_index][index].header;
 
-                    status = dic_j2k_packet_tagtree_set_leaf(
+                    status = j2k_packet_tagtree_set_leaf(
                         &inclusion_tree,
                         bx,
                         by,
@@ -2088,7 +2088,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
                     );
                     if (status != DIC_STATUS_OK)
                         break;
-                    status = dic_j2k_packet_tagtree_set_leaf(
+                    status = j2k_packet_tagtree_set_leaf(
                         &zero_tree,
                         bx,
                         by,
@@ -2101,8 +2101,8 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
 
             if (status == DIC_STATUS_OK)
             {
-                dic_j2k_packet_tagtree_build_minima(&inclusion_tree);
-                dic_j2k_packet_tagtree_build_minima(&zero_tree);
+                j2k_packet_tagtree_build_minima(&inclusion_tree);
+                j2k_packet_tagtree_build_minima(&zero_tree);
             }
 
             for (by = 0; by < packet_blocks_y && status == DIC_STATUS_OK; ++by)
@@ -2112,36 +2112,36 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
                 for (bx = 0; bx < packet_blocks_x; ++bx)
                 {
                     size_t index = (size_t)by * (size_t)packet_blocks_x + (size_t)bx;
-                    const dic_j2k_packet_codeblock *header = &prepared[subband_index][index].header;
+                    const j2k_packet_codeblock *header = &prepared[subband_index][index].header;
 
                     if (header->first_inclusion)
                     {
-                        status = dic_j2k_packet_tagtree_encode_leaf(&inclusion_tree, bx, by, 0u, payload);
+                        status = j2k_packet_tagtree_encode_leaf(&inclusion_tree, bx, by, 0u, payload);
                         if (status != DIC_STATUS_OK || !header->included)
                             continue;
-                        status = dic_j2k_packet_tagtree_encode_leaf(&zero_tree, bx, by, header->zero_bitplanes, payload);
+                        status = j2k_packet_tagtree_encode_leaf(&zero_tree, bx, by, header->zero_bitplanes, payload);
                         if (status != DIC_STATUS_OK)
                             break;
                     }
                     else
                     {
-                        status = dic_j2k_packet_header_append_bit(payload, header->included ? 1u : 0u);
+                        status = j2k_packet_header_append_bit(payload, header->included ? 1u : 0u);
                         if (status != DIC_STATUS_OK || !header->included)
                             continue;
                     }
-                    status = dic_j2k_packet_header_append_codeblock_body(payload, header);
+                    status = j2k_packet_header_append_codeblock_body(payload, header);
                     if (status != DIC_STATUS_OK)
                         break;
                 }
             }
 
-            dic_j2k_packet_tagtree_free(&zero_tree);
-            dic_j2k_packet_tagtree_free(&inclusion_tree);
+            j2k_packet_tagtree_free(&zero_tree);
+            j2k_packet_tagtree_free(&inclusion_tree);
         }
     }
 
     if (status == DIC_STATUS_OK)
-        status = dic_j2k_packet_header_finish(payload);
+        status = j2k_packet_header_finish(payload);
 
     if (status == DIC_STATUS_OK)
         *packet_header_size = payload->size;
@@ -2150,7 +2150,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
     {
         for (subband_index = 0u; subband_index < subband_count && status == DIC_STATUS_OK; ++subband_index)
         {
-            const dic_j2k_packet_subband_payload *subband = subbands + subband_index;
+            const j2k_packet_subband_payload *subband = subbands + subband_index;
             int first_block_x;
             int first_block_y;
             int packet_blocks_x;
@@ -2158,7 +2158,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
             size_t packet_stream_count;
             size_t index;
 
-            status = dic_j2k_packet_payload_window(
+            status = j2k_packet_payload_window(
                 subband,
                 &first_block_x,
                 &first_block_y,
@@ -2174,7 +2174,7 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
             {
                 if (!prepared[subband_index][index].header.included)
                     continue;
-                status = dic_j2k_packet_reserve(payload, prepared[subband_index][index].codeword_size);
+                status = j2k_packet_reserve(payload, prepared[subband_index][index].codeword_size);
                 if (status != DIC_STATUS_OK)
                     break;
                 if (prepared[subband_index][index].codeword_size > 0u)
@@ -2191,22 +2191,22 @@ dic_status dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
     }
 
     if (status != DIC_STATUS_OK)
-        dic_j2k_packet_header_free(payload);
+        j2k_packet_header_free(payload);
     for (subband_index = 0u; subband_index < subband_count; ++subband_index)
         free(prepared[subband_index]);
     free(prepared);
     return status;
 }
 
-dic_status dic_j2k_packet_build_tagged_ebcot_payload_with_header_size(
-    const dic_j2k_packet_subband_payload *subbands,
+dic_status j2k_packet_build_tagged_ebcot_payload_with_header_size(
+    const j2k_packet_subband_payload *subbands,
     size_t subband_count,
-    dic_j2k_packet_header *payload,
+    j2k_packet_header *payload,
     size_t *packet_header_size
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    return dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
+    j2k_DEBUG_ENTER();
+    return j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
         subbands,
         subband_count,
         0u,
@@ -2217,16 +2217,16 @@ dic_status dic_j2k_packet_build_tagged_ebcot_payload_with_header_size(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.1, callers that do not need an EPH insertion point receive the complete packet payload. */
-dic_status dic_j2k_packet_build_tagged_ebcot_payload(
-    const dic_j2k_packet_subband_payload *subbands,
+dic_status j2k_packet_build_tagged_ebcot_payload(
+    const j2k_packet_subband_payload *subbands,
     size_t subband_count,
-    dic_j2k_packet_header *payload
+    j2k_packet_header *payload
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t packet_header_size;
 
-    return dic_j2k_packet_build_tagged_ebcot_payload_with_header_size(
+    return j2k_packet_build_tagged_ebcot_payload_with_header_size(
         subbands,
         subband_count,
         payload,
@@ -2235,14 +2235,14 @@ dic_status dic_j2k_packet_build_tagged_ebcot_payload(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, B.10.8 and Table A.16, LRCP order emits one packet for each layer, resolution, component, and precinct. */
-dic_status dic_j2k_packet_build_empty_lrcp_payload(
+dic_status j2k_packet_build_empty_lrcp_payload(
     uint16_t components,
     uint8_t decomposition_levels,
     uint16_t layers,
-    dic_j2k_packet_header *payload
+    j2k_packet_header *payload
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t packet_count;
     uint32_t packet;
     dic_status status;
@@ -2256,21 +2256,21 @@ dic_status dic_j2k_packet_build_empty_lrcp_payload(
     if (packet_count == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    dic_j2k_packet_header_free(payload);
-    dic_j2k_packet_header_init(payload);
+    j2k_packet_header_free(payload);
+    j2k_packet_header_init(payload);
 
     for (packet = 0u; packet < packet_count; ++packet)
     {
-        status = dic_j2k_packet_header_append_bit(payload, 0u);
+        status = j2k_packet_header_append_bit(payload, 0u);
         if (status != DIC_STATUS_OK)
         {
-            dic_j2k_packet_header_free(payload);
+            j2k_packet_header_free(payload);
             return status;
         }
-        status = dic_j2k_packet_header_finish(payload);
+        status = j2k_packet_header_finish(payload);
         if (status != DIC_STATUS_OK)
         {
-            dic_j2k_packet_header_free(payload);
+            j2k_packet_header_free(payload);
             return status;
         }
         payload->finished = 0;

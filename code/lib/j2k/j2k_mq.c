@@ -1,5 +1,5 @@
 /**
- * @file dic_j2k_mq.c
+ * @file j2k_mq.c
  * @brief Implements the JPEG 2000 MQ arithmetic coder from T.800 Annex C with Annex J decoder guidance.
  *
  * The file contains the Qe state table, context state transitions, byte stuffing, compact
@@ -7,17 +7,17 @@
  * a decision-oriented interface instead of a raw codestream parser, which keeps the project
  * tests focused while preserving Annex C/J state-machine behavior.
  *
- * References: dic_j2k_mq.h for stream/session structures, dic_j2k_ebcot.c for Annex D model
+ * References: j2k_mq.h for stream/session structures, j2k_ebcot.c for Annex D model
  * decisions, and Annex J.1/J.11 for software-convention decoder flow and arithmetic examples.
  */
 
-#include "j2k/dic_j2k_mq.h"
-#include "j2k/dic_j2k_debug.h"
+#include "j2k/j2k_mq.h"
+#include "j2k/j2k_debug.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 
-static const dic_j2k_mq_table_entry DIC_J2K_MQ_TABLE[] = {
+static const j2k_mq_table_entry j2k_MQ_TABLE[] = {
     {0x5601u, 1u, 1u, 1u},
     {0x3401u, 2u, 6u, 0u},
     {0x1801u, 3u, 9u, 0u},
@@ -69,15 +69,15 @@ static const dic_j2k_mq_table_entry DIC_J2K_MQ_TABLE[] = {
 
 enum
 {
-    DIC_J2K_MQ_REGISTER_A_INIT = 0x8000u,
-    DIC_J2K_MQ_REGISTER_CT_INIT = 12u,
-    DIC_J2K_MQ_REGISTER_CT_INIT_AFTER_FF = 13u
+    j2k_MQ_REGISTER_A_INIT = 0x8000u,
+    j2k_MQ_REGISTER_CT_INIT = 12u,
+    j2k_MQ_REGISTER_CT_INIT_AFTER_FF = 13u
 };
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3-C.4, MQ coding consumes context/decision pairs. */
-void dic_j2k_mq_stream_init(dic_j2k_mq_stream *stream)
+void j2k_mq_stream_init(j2k_mq_stream *stream)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (stream == NULL)
         return;
     stream->data = NULL;
@@ -86,55 +86,55 @@ void dic_j2k_mq_stream_init(dic_j2k_mq_stream *stream)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3-C.4, MQ output is a byte stream carrying encoded binary decisions. */
-void dic_j2k_mq_stream_free(dic_j2k_mq_stream *stream)
+void j2k_mq_stream_free(j2k_mq_stream *stream)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (stream == NULL)
         return;
     free(stream->data);
-    dic_j2k_mq_stream_init(stream);
+    j2k_mq_stream_init(stream);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Table C.2, Qe values and probability estimation state transitions. */
-const dic_j2k_mq_table_entry *dic_j2k_mq_table(void)
+const j2k_mq_table_entry *j2k_mq_table(void)
 {
-    DIC_J2K_DEBUG_ENTER();
-    return DIC_J2K_MQ_TABLE;
+    j2k_DEBUG_ENTER();
+    return j2k_MQ_TABLE;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Table C.2, the MQ probability estimator has indexes 0 through 46. */
-size_t dic_j2k_mq_table_size(void)
+size_t j2k_mq_table_size(void)
 {
-    DIC_J2K_DEBUG_ENTER();
-    return sizeof(DIC_J2K_MQ_TABLE) / sizeof(DIC_J2K_MQ_TABLE[0]);
+    j2k_DEBUG_ENTER();
+    return sizeof(j2k_MQ_TABLE) / sizeof(j2k_MQ_TABLE[0]);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.8 Figure C.10, INITENC sets A=0x8000, C=0, and CT=12 or 13 after 0xFF. */
-dic_status dic_j2k_mq_initenc_registers(
-    dic_j2k_mq_registers *registers,
+dic_status j2k_mq_initenc_registers(
+    j2k_mq_registers *registers,
     uint8_t preceding_byte
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (registers == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    registers->a = DIC_J2K_MQ_REGISTER_A_INIT;
+    registers->a = j2k_MQ_REGISTER_A_INIT;
     registers->c = 0u;
     registers->ct = preceding_byte == 0xffu
-        ? DIC_J2K_MQ_REGISTER_CT_INIT_AFTER_FF
-        : DIC_J2K_MQ_REGISTER_CT_INIT;
+        ? j2k_MQ_REGISTER_CT_INIT_AFTER_FF
+        : j2k_MQ_REGISTER_CT_INIT;
 
     return DIC_STATUS_OK;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, C.2.8/C.3.5 and D.3 context modelling, contexts carry an index and MPS sense. */
-dic_status dic_j2k_mq_contexts_init(
-    dic_j2k_mq_context_state *states,
+dic_status j2k_mq_contexts_init(
+    j2k_mq_context_state *states,
     size_t state_count
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
 
     if (states == NULL && state_count > 0u)
@@ -150,18 +150,18 @@ dic_status dic_j2k_mq_contexts_init(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, C.2.4-C.2.5 and Table C.2, MPS/LPS decisions update the context state. */
-dic_status dic_j2k_mq_context_update(
-    dic_j2k_mq_context_state *state,
+dic_status j2k_mq_context_update(
+    j2k_mq_context_state *state,
     uint8_t decision
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    const dic_j2k_mq_table_entry *entry;
+    j2k_DEBUG_ENTER();
+    const j2k_mq_table_entry *entry;
 
-    if (state == NULL || state->index >= dic_j2k_mq_table_size())
+    if (state == NULL || state->index >= j2k_mq_table_size())
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    entry = DIC_J2K_MQ_TABLE + state->index;
+    entry = j2k_MQ_TABLE + state->index;
     if ((decision & 1u) == state->mps)
     {
         state->index = entry->nmps;
@@ -176,39 +176,39 @@ dic_status dic_j2k_mq_context_update(
     return DIC_STATUS_OK;
 }
 
-typedef struct dic_j2k_mq_native_writer
+typedef struct j2k_mq_native_writer
 {
     uint8_t *data;
     size_t size;
     size_t capacity;
     intptr_t bp;
     uint8_t sentinel_byte;
-} dic_j2k_mq_native_writer;
+} j2k_mq_native_writer;
 
-typedef struct dic_j2k_mq_native_reader
+typedef struct j2k_mq_native_reader
 {
     const uint8_t *data;
     size_t size;
     size_t offset;
     uint8_t byte;
-} dic_j2k_mq_native_reader;
+} j2k_mq_native_reader;
 
-typedef struct dic_j2k_mq_native_encoder
+typedef struct j2k_mq_native_encoder
 {
-    dic_j2k_mq_native_writer *writer;
-    dic_j2k_mq_registers registers;
-} dic_j2k_mq_native_encoder;
+    j2k_mq_native_writer *writer;
+    j2k_mq_registers registers;
+} j2k_mq_native_encoder;
 
-typedef struct dic_j2k_mq_native_decoder
+typedef struct j2k_mq_native_decoder
 {
-    dic_j2k_mq_native_reader *reader;
-    dic_j2k_mq_registers registers;
-} dic_j2k_mq_native_decoder;
+    j2k_mq_native_reader *reader;
+    j2k_mq_registers registers;
+} j2k_mq_native_decoder;
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.7 Figure C.9, BP initially addresses a byte before BPST. */
-static void dic_j2k_mq_native_writer_init(dic_j2k_mq_native_writer *writer)
+static void j2k_mq_native_writer_init(j2k_mq_native_writer *writer)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     writer->data = NULL;
     writer->size = 0u;
     writer->capacity = 0u;
@@ -217,20 +217,20 @@ static void dic_j2k_mq_native_writer_init(dic_j2k_mq_native_writer *writer)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.9 Figure C.11, FLUSH completes the current compressed byte buffer. */
-static void dic_j2k_mq_native_writer_free(dic_j2k_mq_native_writer *writer)
+static void j2k_mq_native_writer_free(j2k_mq_native_writer *writer)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     free(writer->data);
-    dic_j2k_mq_native_writer_init(writer);
+    j2k_mq_native_writer_init(writer);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.7 Figure C.9, BYTEOUT advances BP before storing the next B byte. */
-static dic_status dic_j2k_mq_native_writer_reserve(
-    dic_j2k_mq_native_writer *writer,
+static dic_status j2k_mq_native_writer_reserve(
+    j2k_mq_native_writer *writer,
     size_t needed
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t *new_data;
     size_t new_capacity;
 
@@ -254,18 +254,18 @@ static dic_status dic_j2k_mq_native_writer_reserve(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.7 Figure C.9, B is the byte addressed by BP. */
-static uint8_t dic_j2k_mq_native_writer_b(const dic_j2k_mq_native_writer *writer)
+static uint8_t j2k_mq_native_writer_b(const j2k_mq_native_writer *writer)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (writer->bp < 0)
         return writer->sentinel_byte;
     return writer->data[(size_t)writer->bp];
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.7 Figure C.9, carry propagation increments B before the next byte is emitted. */
-static void dic_j2k_mq_native_writer_increment_b(dic_j2k_mq_native_writer *writer)
+static void j2k_mq_native_writer_increment_b(j2k_mq_native_writer *writer)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (writer->bp < 0)
         ++writer->sentinel_byte;
     else
@@ -273,12 +273,12 @@ static void dic_j2k_mq_native_writer_increment_b(dic_j2k_mq_native_writer *write
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.7 Figure C.9, BYTEOUT writes a new compressed image data byte. */
-static dic_status dic_j2k_mq_native_writer_put_next_b(
-    dic_j2k_mq_native_writer *writer,
+static dic_status j2k_mq_native_writer_put_next_b(
+    j2k_mq_native_writer *writer,
     uint32_t value
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
     dic_status status;
 
@@ -286,7 +286,7 @@ static dic_status dic_j2k_mq_native_writer_put_next_b(
         return DIC_STATUS_INVALID_ARGUMENT;
     ++writer->bp;
     index = (size_t)writer->bp;
-    status = dic_j2k_mq_native_writer_reserve(writer, index + 1u);
+    status = j2k_mq_native_writer_reserve(writer, index + 1u);
     if (status != DIC_STATUS_OK)
         return status;
     writer->data[index] = (uint8_t)(value & 0xffu);
@@ -296,12 +296,12 @@ static dic_status dic_j2k_mq_native_writer_put_next_b(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.9 Figure C.11, a final non-0xFF B advances BP to the byte after the included codeword. */
-static dic_status dic_j2k_mq_native_writer_finish(dic_j2k_mq_native_writer *writer)
+static dic_status j2k_mq_native_writer_finish(j2k_mq_native_writer *writer)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (writer == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
-    if (writer->bp >= 0 && dic_j2k_mq_native_writer_b(writer) != 0xffu)
+    if (writer->bp >= 0 && j2k_mq_native_writer_b(writer) != 0xffu)
     {
         if (writer->bp == INTPTR_MAX)
             return DIC_STATUS_INVALID_ARGUMENT;
@@ -311,23 +311,23 @@ static dic_status dic_j2k_mq_native_writer_finish(dic_j2k_mq_native_writer *writ
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.7-C.2.9, BP-BPST is the emitted codeword length after FLUSH. */
-static size_t dic_j2k_mq_native_writer_byte_count(const dic_j2k_mq_native_writer *writer)
+static size_t j2k_mq_native_writer_byte_count(const j2k_mq_native_writer *writer)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (writer == NULL || writer->bp < 0)
         return 0u;
     return (size_t)writer->bp;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.7 Figure C.9, BYTEOUT handles carry and 0xFF bit stuffing from C. */
-static dic_status dic_j2k_mq_native_byteout(dic_j2k_mq_native_encoder *encoder)
+static dic_status j2k_mq_native_byteout(j2k_mq_native_encoder *encoder)
 {
-    DIC_J2K_DEBUG_ENTER();
-    uint8_t b = dic_j2k_mq_native_writer_b(encoder->writer);
+    j2k_DEBUG_ENTER();
+    uint8_t b = j2k_mq_native_writer_b(encoder->writer);
 
     if (b == 0xffu)
     {
-        dic_status status = dic_j2k_mq_native_writer_put_next_b(
+        dic_status status = j2k_mq_native_writer_put_next_b(
             encoder->writer,
             encoder->registers.c >> 20u
         );
@@ -340,14 +340,14 @@ static dic_status dic_j2k_mq_native_byteout(dic_j2k_mq_native_encoder *encoder)
 
     if ((encoder->registers.c & 0x8000000u) != 0u)
     {
-        dic_j2k_mq_native_writer_increment_b(encoder->writer);
-        b = dic_j2k_mq_native_writer_b(encoder->writer);
+        j2k_mq_native_writer_increment_b(encoder->writer);
+        b = j2k_mq_native_writer_b(encoder->writer);
         if (b == 0xffu)
         {
             dic_status status;
 
             encoder->registers.c &= 0x7ffffffu;
-            status = dic_j2k_mq_native_writer_put_next_b(
+            status = j2k_mq_native_writer_put_next_b(
                 encoder->writer,
                 encoder->registers.c >> 20u
             );
@@ -360,7 +360,7 @@ static dic_status dic_j2k_mq_native_byteout(dic_j2k_mq_native_encoder *encoder)
     }
 
     {
-        dic_status status = dic_j2k_mq_native_writer_put_next_b(
+        dic_status status = j2k_mq_native_writer_put_next_b(
             encoder->writer,
             encoder->registers.c >> 19u
         );
@@ -373,9 +373,9 @@ static dic_status dic_j2k_mq_native_byteout(dic_j2k_mq_native_encoder *encoder)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.6 Figure C.8, RENORME shifts A and C until A reaches 0x8000. */
-static dic_status dic_j2k_mq_native_renorme(dic_j2k_mq_native_encoder *encoder)
+static dic_status j2k_mq_native_renorme(j2k_mq_native_encoder *encoder)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     do
     {
         encoder->registers.a <<= 1u;
@@ -383,7 +383,7 @@ static dic_status dic_j2k_mq_native_renorme(dic_j2k_mq_native_encoder *encoder)
         --encoder->registers.ct;
         if (encoder->registers.ct == 0u)
         {
-            dic_status status = dic_j2k_mq_native_byteout(encoder);
+            dic_status status = j2k_mq_native_byteout(encoder);
             if (status != DIC_STATUS_OK)
                 return status;
         }
@@ -393,13 +393,13 @@ static dic_status dic_j2k_mq_native_renorme(dic_j2k_mq_native_encoder *encoder)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.5 Figure C.7, CODEMPS encodes the MPS sub-interval and NMPS update. */
-static dic_status dic_j2k_mq_native_codemps(
-    dic_j2k_mq_native_encoder *encoder,
-    dic_j2k_mq_context_state *state
+static dic_status j2k_mq_native_codemps(
+    j2k_mq_native_encoder *encoder,
+    j2k_mq_context_state *state
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    const dic_j2k_mq_table_entry *entry = DIC_J2K_MQ_TABLE + state->index;
+    j2k_DEBUG_ENTER();
+    const j2k_mq_table_entry *entry = j2k_MQ_TABLE + state->index;
 
     encoder->registers.a -= entry->qe;
     if ((encoder->registers.a & 0x8000u) != 0u)
@@ -413,17 +413,17 @@ static dic_status dic_j2k_mq_native_codemps(
     else
         encoder->registers.c += entry->qe;
     state->index = entry->nmps;
-    return dic_j2k_mq_native_renorme(encoder);
+    return j2k_mq_native_renorme(encoder);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.4 Figure C.6, CODELPS encodes the LPS path and NLPS/SWITCH update. */
-static dic_status dic_j2k_mq_native_codelps(
-    dic_j2k_mq_native_encoder *encoder,
-    dic_j2k_mq_context_state *state
+static dic_status j2k_mq_native_codelps(
+    j2k_mq_native_encoder *encoder,
+    j2k_mq_context_state *state
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    const dic_j2k_mq_table_entry *entry = DIC_J2K_MQ_TABLE + state->index;
+    j2k_DEBUG_ENTER();
+    const j2k_mq_table_entry *entry = j2k_MQ_TABLE + state->index;
 
     encoder->registers.a -= entry->qe;
     if (encoder->registers.a < entry->qe)
@@ -433,13 +433,13 @@ static dic_status dic_j2k_mq_native_codelps(
     if (entry->switch_mps)
         state->mps = (uint8_t)(1u - state->mps);
     state->index = entry->nlps;
-    return dic_j2k_mq_native_renorme(encoder);
+    return j2k_mq_native_renorme(encoder);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.9 Figure C.12, SETBITS forces terminating one bits without crossing the interval bound. */
-static void dic_j2k_mq_native_setbits(dic_j2k_mq_native_encoder *encoder)
+static void j2k_mq_native_setbits(j2k_mq_native_encoder *encoder)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint32_t bound = encoder->registers.c + encoder->registers.a;
 
     encoder->registers.c |= 0xffffu;
@@ -448,27 +448,27 @@ static void dic_j2k_mq_native_setbits(dic_j2k_mq_native_encoder *encoder)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2.9 Figure C.11, FLUSH sets terminating bits and emits the final MQ bytes. */
-static dic_status dic_j2k_mq_native_flush(dic_j2k_mq_native_encoder *encoder)
+static dic_status j2k_mq_native_flush(j2k_mq_native_encoder *encoder)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     dic_status status;
 
-    dic_j2k_mq_native_setbits(encoder);
+    j2k_mq_native_setbits(encoder);
     encoder->registers.c <<= encoder->registers.ct;
-    status = dic_j2k_mq_native_byteout(encoder);
+    status = j2k_mq_native_byteout(encoder);
     if (status != DIC_STATUS_OK)
         return status;
     encoder->registers.c <<= encoder->registers.ct;
-    status = dic_j2k_mq_native_byteout(encoder);
+    status = j2k_mq_native_byteout(encoder);
     if (status != DIC_STATUS_OK)
         return status;
-    return dic_j2k_mq_native_writer_finish(encoder->writer);
+    return j2k_mq_native_writer_finish(encoder->writer);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.4 Figure C.19, BYTEIN reads B and compensates for stuffed bits after 0xFF. */
-static void dic_j2k_mq_native_bytein(dic_j2k_mq_native_decoder *decoder)
+static void j2k_mq_native_bytein(j2k_mq_native_decoder *decoder)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t b1;
 
     if (decoder->reader->byte == 0xffu)
@@ -499,36 +499,36 @@ static void dic_j2k_mq_native_bytein(dic_j2k_mq_native_decoder *decoder)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.5 Figure C.20, INITDEC loads the first byte then aligns C by seven bits. */
-static void dic_j2k_mq_native_initdec(
-    dic_j2k_mq_native_decoder *decoder,
-    dic_j2k_mq_native_reader *reader,
-    const dic_j2k_mq_stream *stream
+static void j2k_mq_native_initdec(
+    j2k_mq_native_decoder *decoder,
+    j2k_mq_native_reader *reader,
+    const j2k_mq_stream *stream
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     reader->data = stream->data;
     reader->size = stream->byte_count;
     reader->offset = 0u;
     reader->byte = stream->byte_count > 0u ? stream->data[0] : 0xffu;
 
     decoder->reader = reader;
-    decoder->registers.a = DIC_J2K_MQ_REGISTER_A_INIT;
+    decoder->registers.a = j2k_MQ_REGISTER_A_INIT;
     decoder->registers.c = ((uint32_t)reader->byte) << 16u;
     decoder->registers.ct = 0u;
-    dic_j2k_mq_native_bytein(decoder);
+    j2k_mq_native_bytein(decoder);
     decoder->registers.c <<= 7u;
     decoder->registers.ct = (uint8_t)(decoder->registers.ct - 7u);
-    decoder->registers.a = DIC_J2K_MQ_REGISTER_A_INIT;
+    decoder->registers.a = j2k_MQ_REGISTER_A_INIT;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.3 Figure C.18, RENORMD shifts A and C and calls BYTEIN when CT is exhausted. */
-static void dic_j2k_mq_native_renormd(dic_j2k_mq_native_decoder *decoder)
+static void j2k_mq_native_renormd(j2k_mq_native_decoder *decoder)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     do
     {
         if (decoder->registers.ct == 0u)
-            dic_j2k_mq_native_bytein(decoder);
+            j2k_mq_native_bytein(decoder);
         decoder->registers.a <<= 1u;
         decoder->registers.c <<= 1u;
         --decoder->registers.ct;
@@ -536,13 +536,13 @@ static void dic_j2k_mq_native_renormd(dic_j2k_mq_native_decoder *decoder)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.2 Figure C.16, MPS_EXCHANGE applies the conditional MPS/LPS exchange. */
-static uint8_t dic_j2k_mq_native_mps_exchange(
-    dic_j2k_mq_native_decoder *decoder,
-    dic_j2k_mq_context_state *state,
-    const dic_j2k_mq_table_entry *entry
+static uint8_t j2k_mq_native_mps_exchange(
+    j2k_mq_native_decoder *decoder,
+    j2k_mq_context_state *state,
+    const j2k_mq_table_entry *entry
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t decision;
 
     if (decoder->registers.a < entry->qe)
@@ -561,13 +561,13 @@ static uint8_t dic_j2k_mq_native_mps_exchange(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.2 Figure C.17, LPS_EXCHANGE selects the decoded decision and next state. */
-static uint8_t dic_j2k_mq_native_lps_exchange(
-    dic_j2k_mq_native_decoder *decoder,
-    dic_j2k_mq_context_state *state,
-    const dic_j2k_mq_table_entry *entry
+static uint8_t j2k_mq_native_lps_exchange(
+    j2k_mq_native_decoder *decoder,
+    j2k_mq_context_state *state,
+    const j2k_mq_table_entry *entry
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t decision;
 
     if (decoder->registers.a < entry->qe)
@@ -588,20 +588,20 @@ static uint8_t dic_j2k_mq_native_lps_exchange(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.2 Figure C.15, DECODE compares Chigh with Qe and returns one binary decision. */
-static dic_status dic_j2k_mq_native_decode(
-    dic_j2k_mq_native_decoder *decoder,
-    dic_j2k_mq_context_state *state,
+static dic_status j2k_mq_native_decode(
+    j2k_mq_native_decoder *decoder,
+    j2k_mq_context_state *state,
     uint8_t *decision
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    const dic_j2k_mq_table_entry *entry = DIC_J2K_MQ_TABLE + state->index;
+    j2k_DEBUG_ENTER();
+    const j2k_mq_table_entry *entry = j2k_MQ_TABLE + state->index;
 
     decoder->registers.a -= entry->qe;
     if ((decoder->registers.c >> 16u) < entry->qe)
     {
-        *decision = dic_j2k_mq_native_lps_exchange(decoder, state, entry);
-        dic_j2k_mq_native_renormd(decoder);
+        *decision = j2k_mq_native_lps_exchange(decoder, state, entry);
+        j2k_mq_native_renormd(decoder);
         return DIC_STATUS_OK;
     }
 
@@ -612,15 +612,15 @@ static dic_status dic_j2k_mq_native_decode(
         return DIC_STATUS_OK;
     }
 
-    *decision = dic_j2k_mq_native_mps_exchange(decoder, state, entry);
-    dic_j2k_mq_native_renormd(decoder);
+    *decision = j2k_mq_native_mps_exchange(decoder, state, entry);
+    j2k_mq_native_renormd(decoder);
     return DIC_STATUS_OK;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.4 Figure C.19, streaming BYTEIN uses the same marker/stuff-bit rules as the bulk decoder. */
-static void dic_j2k_mq_session_bytein(dic_j2k_mq_decoder_session *session)
+static void j2k_mq_session_bytein(j2k_mq_decoder_session *session)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t b1;
 
     if (session->byte == 0xffu)
@@ -648,13 +648,13 @@ static void dic_j2k_mq_session_bytein(dic_j2k_mq_decoder_session *session)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.3 Figure C.18, streaming RENORMD consumes bytes as decisions are requested. */
-static void dic_j2k_mq_session_renormd(dic_j2k_mq_decoder_session *session)
+static void j2k_mq_session_renormd(j2k_mq_decoder_session *session)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     do
     {
         if (session->registers.ct == 0u)
-            dic_j2k_mq_session_bytein(session);
+            j2k_mq_session_bytein(session);
         session->registers.a <<= 1u;
         session->registers.c <<= 1u;
         --session->registers.ct;
@@ -662,13 +662,13 @@ static void dic_j2k_mq_session_renormd(dic_j2k_mq_decoder_session *session)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.2 Figure C.16, streaming MPS_EXCHANGE updates the addressed context state. */
-static uint8_t dic_j2k_mq_session_mps_exchange(
-    dic_j2k_mq_decoder_session *session,
-    dic_j2k_mq_context_state *state,
-    const dic_j2k_mq_table_entry *entry
+static uint8_t j2k_mq_session_mps_exchange(
+    j2k_mq_decoder_session *session,
+    j2k_mq_context_state *state,
+    const j2k_mq_table_entry *entry
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t decision;
 
     if (session->registers.a < entry->qe)
@@ -687,13 +687,13 @@ static uint8_t dic_j2k_mq_session_mps_exchange(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.2 Figure C.17, streaming LPS_EXCHANGE mirrors the bulk decoder. */
-static uint8_t dic_j2k_mq_session_lps_exchange(
-    dic_j2k_mq_decoder_session *session,
-    dic_j2k_mq_context_state *state,
-    const dic_j2k_mq_table_entry *entry
+static uint8_t j2k_mq_session_lps_exchange(
+    j2k_mq_decoder_session *session,
+    j2k_mq_context_state *state,
+    const j2k_mq_table_entry *entry
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t decision;
 
     if (session->registers.a < entry->qe)
@@ -714,14 +714,14 @@ static uint8_t dic_j2k_mq_session_lps_exchange(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.5 Figure C.20, streaming INITDEC initializes C, CT, A and caller-supplied context states. */
-dic_status dic_j2k_mq_decoder_session_init(
-    dic_j2k_mq_decoder_session *session,
-    const dic_j2k_mq_stream *stream,
-    const dic_j2k_mq_context_state *initial_states,
+dic_status j2k_mq_decoder_session_init(
+    j2k_mq_decoder_session *session,
+    const j2k_mq_stream *stream,
+    const j2k_mq_context_state *initial_states,
     size_t initial_state_count
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
 
     if (session == NULL || stream == NULL)
@@ -730,11 +730,11 @@ dic_status dic_j2k_mq_decoder_session_init(
         return DIC_STATUS_INVALID_ARGUMENT;
     if (initial_state_count > sizeof(session->states) / sizeof(session->states[0]))
         return DIC_STATUS_INVALID_ARGUMENT;
-    if (dic_j2k_mq_contexts_init(session->states, sizeof(session->states) / sizeof(session->states[0])) != DIC_STATUS_OK)
+    if (j2k_mq_contexts_init(session->states, sizeof(session->states) / sizeof(session->states[0])) != DIC_STATUS_OK)
         return DIC_STATUS_INVALID_ARGUMENT;
     for (index = 0u; index < initial_state_count; ++index)
     {
-        if (initial_states[index].index >= dic_j2k_mq_table_size())
+        if (initial_states[index].index >= j2k_mq_table_size())
             return DIC_STATUS_INVALID_ARGUMENT;
         session->states[index] = initial_states[index];
     }
@@ -743,28 +743,28 @@ dic_status dic_j2k_mq_decoder_session_init(
     session->size = stream->byte_count;
     session->offset = 0u;
     session->byte = stream->byte_count > 0u ? stream->data[0] : 0xffu;
-    session->registers.a = DIC_J2K_MQ_REGISTER_A_INIT;
+    session->registers.a = j2k_MQ_REGISTER_A_INIT;
     session->registers.c = ((uint32_t)session->byte) << 16u;
     session->registers.ct = 0u;
     session->decisions_decoded = 0u;
     session->decision_limit = stream->bit_count;
-    dic_j2k_mq_session_bytein(session);
+    j2k_mq_session_bytein(session);
     session->registers.c <<= 7u;
     session->registers.ct = (uint8_t)(session->registers.ct - 7u);
-    session->registers.a = DIC_J2K_MQ_REGISTER_A_INIT;
+    session->registers.a = j2k_MQ_REGISTER_A_INIT;
     return DIC_STATUS_OK;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3.2 Figure C.15, streaming DECODE returns one decision for the requested context. */
-dic_status dic_j2k_mq_decoder_session_decode(
-    dic_j2k_mq_decoder_session *session,
+dic_status j2k_mq_decoder_session_decode(
+    j2k_mq_decoder_session *session,
     uint8_t context,
     uint8_t *decision
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_mq_context_state *state;
-    const dic_j2k_mq_table_entry *entry;
+    j2k_DEBUG_ENTER();
+    j2k_mq_context_state *state;
+    const j2k_mq_table_entry *entry;
 
     if (session == NULL || decision == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -772,15 +772,15 @@ dic_status dic_j2k_mq_decoder_session_decode(
         return DIC_J2K_MALFORMED_ARITHMETIC_STREAM;
 
     state = session->states + context;
-    if (state->index >= dic_j2k_mq_table_size())
+    if (state->index >= j2k_mq_table_size())
         return DIC_STATUS_INVALID_ARGUMENT;
-    entry = DIC_J2K_MQ_TABLE + state->index;
+    entry = j2k_MQ_TABLE + state->index;
 
     session->registers.a -= entry->qe;
     if ((session->registers.c >> 16u) < entry->qe)
     {
-        *decision = dic_j2k_mq_session_lps_exchange(session, state, entry);
-        dic_j2k_mq_session_renormd(session);
+        *decision = j2k_mq_session_lps_exchange(session, state, entry);
+        j2k_mq_session_renormd(session);
     }
     else
     {
@@ -791,8 +791,8 @@ dic_status dic_j2k_mq_decoder_session_decode(
         }
         else
         {
-            *decision = dic_j2k_mq_session_mps_exchange(session, state, entry);
-            dic_j2k_mq_session_renormd(session);
+            *decision = j2k_mq_session_mps_exchange(session, state, entry);
+            j2k_mq_session_renormd(session);
         }
     }
     ++session->decisions_decoded;
@@ -800,15 +800,15 @@ dic_status dic_j2k_mq_decoder_session_decode(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.3 Figures C.2-C.3, encoder input is an ordered sequence of CX,D pairs. */
-dic_status dic_j2k_mq_encode_decisions(
+dic_status j2k_mq_encode_decisions(
     const uint8_t *contexts,
     const uint8_t *decisions,
     size_t decision_count,
-    dic_j2k_mq_stream *stream
+    j2k_mq_stream *stream
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    return dic_j2k_mq_encode_decisions_with_states(
+    j2k_DEBUG_ENTER();
+    return j2k_mq_encode_decisions_with_states(
         NULL,
         0u,
         contexts,
@@ -819,17 +819,17 @@ dic_status dic_j2k_mq_encode_decisions(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex D.3 and Table D.7, coefficient coding may override the default MQ initial states. */
-dic_status dic_j2k_mq_encode_decisions_with_states(
-    const dic_j2k_mq_context_state *initial_states,
+dic_status j2k_mq_encode_decisions_with_states(
+    const j2k_mq_context_state *initial_states,
     size_t initial_state_count,
     const uint8_t *contexts,
     const uint8_t *decisions,
     size_t decision_count,
-    dic_j2k_mq_stream *stream
+    j2k_mq_stream *stream
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    return dic_j2k_mq_encode_decisions_with_state_result(
+    j2k_DEBUG_ENTER();
+    return j2k_mq_encode_decisions_with_state_result(
         initial_states,
         initial_state_count,
         contexts,
@@ -842,22 +842,22 @@ dic_status dic_j2k_mq_encode_decisions_with_states(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.2, packet pass termination needs the true context states left by the MQ encoder. */
-dic_status dic_j2k_mq_encode_decisions_with_state_result(
-    const dic_j2k_mq_context_state *initial_states,
+dic_status j2k_mq_encode_decisions_with_state_result(
+    const j2k_mq_context_state *initial_states,
     size_t initial_state_count,
     const uint8_t *contexts,
     const uint8_t *decisions,
     size_t decision_count,
-    dic_j2k_mq_stream *stream,
-    dic_j2k_mq_context_state *final_states,
+    j2k_mq_stream *stream,
+    j2k_mq_context_state *final_states,
     size_t final_state_count
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
-    dic_j2k_mq_context_state states[256];
-    dic_j2k_mq_native_writer writer;
-    dic_j2k_mq_native_encoder encoder;
+    j2k_mq_context_state states[256];
+    j2k_mq_native_writer writer;
+    j2k_mq_native_encoder encoder;
 
     if (contexts == NULL || decisions == NULL || stream == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -869,46 +869,46 @@ dic_status dic_j2k_mq_encode_decisions_with_state_result(
         return DIC_STATUS_INVALID_ARGUMENT;
     if (initial_state_count > sizeof(states) / sizeof(states[0]))
         return DIC_STATUS_INVALID_ARGUMENT;
-    if (dic_j2k_mq_contexts_init(states, sizeof(states) / sizeof(states[0])) != DIC_STATUS_OK)
+    if (j2k_mq_contexts_init(states, sizeof(states) / sizeof(states[0])) != DIC_STATUS_OK)
         return DIC_STATUS_INVALID_ARGUMENT;
     for (index = 0u; index < initial_state_count; ++index)
     {
-        if (initial_states[index].index >= dic_j2k_mq_table_size())
+        if (initial_states[index].index >= j2k_mq_table_size())
             return DIC_STATUS_INVALID_ARGUMENT;
         states[index] = initial_states[index];
     }
 
-    dic_j2k_mq_stream_free(stream);
-    dic_j2k_mq_native_writer_init(&writer);
+    j2k_mq_stream_free(stream);
+    j2k_mq_native_writer_init(&writer);
     encoder.writer = &writer;
-    if (dic_j2k_mq_initenc_registers(&encoder.registers, 0u) != DIC_STATUS_OK)
+    if (j2k_mq_initenc_registers(&encoder.registers, 0u) != DIC_STATUS_OK)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     for (index = 0u; index < decision_count; ++index)
     {
         dic_status status;
         uint8_t cx = contexts[index];
-        dic_j2k_mq_context_state *state = states + cx;
+        j2k_mq_context_state *state = states + cx;
 
         if ((decisions[index] & 1u) == state->mps)
-            status = dic_j2k_mq_native_codemps(&encoder, state);
+            status = j2k_mq_native_codemps(&encoder, state);
         else
-            status = dic_j2k_mq_native_codelps(&encoder, state);
+            status = j2k_mq_native_codelps(&encoder, state);
         if (status != DIC_STATUS_OK)
         {
-            dic_j2k_mq_native_writer_free(&writer);
+            j2k_mq_native_writer_free(&writer);
             return status;
         }
     }
 
-    if (dic_j2k_mq_native_flush(&encoder) != DIC_STATUS_OK)
+    if (j2k_mq_native_flush(&encoder) != DIC_STATUS_OK)
     {
-        dic_j2k_mq_native_writer_free(&writer);
+        j2k_mq_native_writer_free(&writer);
         return DIC_STATUS_MEMORY_ERROR;
     }
 
     stream->data = writer.data;
-    stream->byte_count = dic_j2k_mq_native_writer_byte_count(&writer);
+    stream->byte_count = j2k_mq_native_writer_byte_count(&writer);
     stream->bit_count = decision_count;
     for (index = 0u; index < final_state_count; ++index)
         final_states[index] = states[index];
@@ -916,15 +916,15 @@ dic_status dic_j2k_mq_encode_decisions_with_state_result(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.4 Figure C.14-C.15, decoder reproduces the D sequence from the same context order. */
-dic_status dic_j2k_mq_decode_decisions(
-    const dic_j2k_mq_stream *stream,
+dic_status j2k_mq_decode_decisions(
+    const j2k_mq_stream *stream,
     const uint8_t *contexts,
     size_t decision_count,
     uint8_t *decisions
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    return dic_j2k_mq_decode_decisions_with_states(
+    j2k_DEBUG_ENTER();
+    return j2k_mq_decode_decisions_with_states(
         stream,
         NULL,
         0u,
@@ -935,20 +935,20 @@ dic_status dic_j2k_mq_decode_decisions(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex C.4 and Table D.7, decoding must start from the same context states as encoding. */
-dic_status dic_j2k_mq_decode_decisions_with_states(
-    const dic_j2k_mq_stream *stream,
-    const dic_j2k_mq_context_state *initial_states,
+dic_status j2k_mq_decode_decisions_with_states(
+    const j2k_mq_stream *stream,
+    const j2k_mq_context_state *initial_states,
     size_t initial_state_count,
     const uint8_t *contexts,
     size_t decision_count,
     uint8_t *decisions
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
-    dic_j2k_mq_context_state states[256];
-    dic_j2k_mq_native_reader reader;
-    dic_j2k_mq_native_decoder decoder;
+    j2k_mq_context_state states[256];
+    j2k_mq_native_reader reader;
+    j2k_mq_native_decoder decoder;
 
     if (stream == NULL || contexts == NULL || decisions == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -958,24 +958,24 @@ dic_status dic_j2k_mq_decode_decisions_with_states(
         return DIC_STATUS_INVALID_ARGUMENT;
     if (decision_count > stream->bit_count)
         return DIC_J2K_MALFORMED_ARITHMETIC_STREAM;
-    if (dic_j2k_mq_contexts_init(states, sizeof(states) / sizeof(states[0])) != DIC_STATUS_OK)
+    if (j2k_mq_contexts_init(states, sizeof(states) / sizeof(states[0])) != DIC_STATUS_OK)
         return DIC_STATUS_INVALID_ARGUMENT;
     for (index = 0u; index < initial_state_count; ++index)
     {
-        if (initial_states[index].index >= dic_j2k_mq_table_size())
+        if (initial_states[index].index >= j2k_mq_table_size())
             return DIC_STATUS_INVALID_ARGUMENT;
         states[index] = initial_states[index];
     }
 
-    dic_j2k_mq_native_initdec(&decoder, &reader, stream);
+    j2k_mq_native_initdec(&decoder, &reader, stream);
 
     for (index = 0u; index < decision_count; ++index)
     {
         dic_status status;
         uint8_t cx = contexts[index];
-        dic_j2k_mq_context_state *state = states + cx;
+        j2k_mq_context_state *state = states + cx;
 
-        status = dic_j2k_mq_native_decode(&decoder, state, decisions + index);
+        status = j2k_mq_native_decode(&decoder, state, decisions + index);
         if (status != DIC_STATUS_OK)
             return status;
     }

@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 /** Builds a coefficient-domain Maxshift map by tracing an image ROI through reversible 5-3 synthesis dependencies. */
-dic_status dic_j2k_roi_build_shift_map(
+dic_status j2k_roi_build_shift_map(
     int width,
     int height,
     int levels,
@@ -19,7 +19,7 @@ dic_status dic_j2k_roi_build_shift_map(
 );
 
 /** Applies the Maxshift magnitude scaling to every coefficient selected by a coefficient-domain ROI map. */
-dic_status dic_j2k_roi_apply_shift_map(
+dic_status j2k_roi_apply_shift_map(
     int32_t *plane,
     int width,
     int height,

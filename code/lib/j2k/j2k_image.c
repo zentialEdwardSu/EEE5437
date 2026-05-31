@@ -1,5 +1,5 @@
 /**
- * @file dic_j2k_image.c
+ * @file j2k_image.c
  * @brief Converts project images into the constrained JPEG 2000 path described by Annexes B, D, F, G, and I.
  *
  * This file tiles image data, applies the reversible component transform when applicable,
@@ -7,118 +7,118 @@
  * EBCOT-encodes them, and writes either a raw codestream or JP2 file. It is not a full
  * Part 1 encoder: precinct progression variation and optional coding styles are
  * deliberately fixed to the local testable subset, while quality layers use the
- * EBCOT pass-level rate-distortion metadata maintained by dic_j2k_packet.c.
+ * EBCOT pass-level rate-distortion metadata maintained by j2k_packet.c.
  *
- * References: image_u8 for input ownership, dic_j2k_layout.c for Annex B geometry,
- * dic_j2k_rct.c for Annex G RCT, dic_j2k_ebcot.c for Annex D coding, dic_j2k_codestream.c
- * and dic_jp2_file.c for output syntax, plus Annex J.3-J.5 sample transform material.
+ * References: image_u8 for input ownership, j2k_layout.c for Annex B geometry,
+ * j2k_rct.c for Annex G RCT, j2k_ebcot.c for Annex D coding, j2k_codestream.c
+ * and jp2_file.c for output syntax, plus Annex J.3-J.5 sample transform material.
  */
 
-#include "j2k/dic_j2k_image.h"
-#include "j2k/dic_j2k_debug.h"
+#include "j2k/j2k_image.h"
+#include "j2k/j2k_debug.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "codec/dic_subband.h"
-#include "j2k/dic_j2k_codestream.h"
-#include "j2k/dic_j2k_packet.h"
-#include "j2k/dic_j2k_rct.h"
-#include "j2k/dic_j2k_roi.h"
-#include "j2k/dic_jp2_file.h"
+#include "j2k/j2k_codestream.h"
+#include "j2k/j2k_packet.h"
+#include "j2k/j2k_rct.h"
+#include "j2k/j2k_roi.h"
+#include "j2k/jp2_file.h"
 #include "wavelet/dic_dwt53.h"
 
 enum
 {
-    DIC_J2K_IMAGE_CODEBLOCK_SIZE = 64
+    j2k_IMAGE_CODEBLOCK_SIZE = 64
 };
 
-typedef struct dic_j2k_image_payload
+typedef struct j2k_image_payload
 {
     uint8_t *data;
     size_t size;
     size_t capacity;
-} dic_j2k_image_payload;
+} j2k_image_payload;
 
-typedef struct dic_j2k_image_stream_list
+typedef struct j2k_image_stream_list
 {
-    dic_j2k_codeblock_stream *streams;
+    j2k_codeblock_stream *streams;
     size_t count;
     size_t capacity;
-} dic_j2k_image_stream_list;
+} j2k_image_stream_list;
 
-typedef struct dic_j2k_image_tile_payloads
+typedef struct j2k_image_tile_payloads
 {
-    dic_j2k_tile_part_payload *tile_parts;
-    dic_j2k_image_payload *payloads;
+    j2k_tile_part_payload *tile_parts;
+    j2k_image_payload *payloads;
     size_t count;
-} dic_j2k_image_tile_payloads;
+} j2k_image_tile_payloads;
 
-static void dic_j2k_image_payload_init(dic_j2k_image_payload *payload)
+static void j2k_image_payload_init(j2k_image_payload *payload)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     payload->data = NULL;
     payload->size = 0u;
     payload->capacity = 0u;
 }
 
-static void dic_j2k_image_payload_free(dic_j2k_image_payload *payload)
+static void j2k_image_payload_free(j2k_image_payload *payload)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     free(payload->data);
-    dic_j2k_image_payload_init(payload);
+    j2k_image_payload_init(payload);
 }
 
-static void dic_j2k_image_stream_list_init(dic_j2k_image_stream_list *list)
+static void j2k_image_stream_list_init(j2k_image_stream_list *list)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     list->streams = NULL;
     list->count = 0u;
     list->capacity = 0u;
 }
 
-static void dic_j2k_image_stream_list_free(dic_j2k_image_stream_list *list)
+static void j2k_image_stream_list_free(j2k_image_stream_list *list)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     while (list->capacity > 0u)
     {
         --list->capacity;
-        dic_j2k_codeblock_stream_free(list->streams + list->capacity);
+        j2k_codeblock_stream_free(list->streams + list->capacity);
     }
     free(list->streams);
-    dic_j2k_image_stream_list_init(list);
+    j2k_image_stream_list_init(list);
 }
 
-static void dic_j2k_image_tile_payloads_init(dic_j2k_image_tile_payloads *tile_payloads)
+static void j2k_image_tile_payloads_init(j2k_image_tile_payloads *tile_payloads)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     tile_payloads->tile_parts = NULL;
     tile_payloads->payloads = NULL;
     tile_payloads->count = 0u;
 }
 
-static void dic_j2k_image_tile_payloads_free(dic_j2k_image_tile_payloads *tile_payloads)
+static void j2k_image_tile_payloads_free(j2k_image_tile_payloads *tile_payloads)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
 
     if (tile_payloads == NULL)
         return;
     for (index = 0u; index < tile_payloads->count; ++index)
-        dic_j2k_image_payload_free(tile_payloads->payloads + index);
+        j2k_image_payload_free(tile_payloads->payloads + index);
     free(tile_payloads->payloads);
     free(tile_payloads->tile_parts);
-    dic_j2k_image_tile_payloads_init(tile_payloads);
+    j2k_image_tile_payloads_init(tile_payloads);
 }
 
-static dic_status dic_j2k_image_payload_append(
-    dic_j2k_image_payload *payload,
+static dic_status j2k_image_payload_append(
+    j2k_image_payload *payload,
     const uint8_t *data,
     size_t size
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t *new_data;
     size_t new_capacity;
 
@@ -148,74 +148,49 @@ static dic_status dic_j2k_image_payload_append(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex A marker fields are emitted most-significant byte first. */
-static dic_status dic_j2k_image_payload_append_u16_be(
-    dic_j2k_image_payload *payload,
+static dic_status j2k_image_payload_append_u16_be(
+    j2k_image_payload *payload,
     uint16_t value
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t bytes[2];
 
     bytes[0] = (uint8_t)(value >> 8);
     bytes[1] = (uint8_t)(value & 0xffu);
-    return dic_j2k_image_payload_append(payload, bytes, sizeof(bytes));
-}
-
-/* Reference: paper/T-REC-T.800-200208.pdf, A.8.1 Table A.40, SOP is placed immediately before packet data. */
-static dic_status dic_j2k_image_payload_append_sop(
-    dic_j2k_image_payload *payload,
-    uint16_t packet_sequence
-)
-{
-    DIC_J2K_DEBUG_ENTER();
-    dic_status status;
-
-    if (payload == NULL)
-        return DIC_STATUS_INVALID_ARGUMENT;
-
-    status = dic_j2k_image_payload_append_u16_be(payload, DIC_J2K_MARKER_SOP);
-    if (status == DIC_STATUS_OK)
-        status = dic_j2k_image_payload_append_u16_be(payload, 4u);
-    if (status == DIC_STATUS_OK)
-        status = dic_j2k_image_payload_append_u16_be(payload, packet_sequence);
-    return status;
-}
-
-/* Reference: paper/T-REC-T.800-200208.pdf, A.8.2 Table A.41, EPH immediately follows each packet header. */
-static dic_status dic_j2k_image_payload_append_eph(dic_j2k_image_payload *payload)
-{
-    DIC_J2K_DEBUG_ENTER();
-    if (payload == NULL)
-        return DIC_STATUS_INVALID_ARGUMENT;
-    return dic_j2k_image_payload_append_u16_be(payload, DIC_J2K_MARKER_EPH);
+    return j2k_image_payload_append(payload, bytes, sizeof(bytes));
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.8 and B.10, SOP/EPH markers wrap packet headers without changing code-block bytes. */
-static dic_status dic_j2k_image_payload_append_packet(
-    dic_j2k_image_payload *payload,
-    const dic_j2k_packet_header *packet,
+static dic_status j2k_image_payload_append_packet(
+    j2k_image_payload *payload,
+    const j2k_packet_header *packet,
     size_t packet_header_size,
     uint16_t packet_sequence
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     dic_status status;
 
     if (payload == NULL || packet == NULL || packet_header_size > packet->size)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_image_payload_append_sop(payload, packet_sequence);
+    status = j2k_image_payload_append_u16_be(payload, j2k_MARKER_SOP);
     if (status == DIC_STATUS_OK)
-        status = dic_j2k_image_payload_append(payload, packet->data, packet_header_size);
+        status = j2k_image_payload_append_u16_be(payload, 4u);
     if (status == DIC_STATUS_OK)
-        status = dic_j2k_image_payload_append_eph(payload);
+        status = j2k_image_payload_append_u16_be(payload, packet_sequence);
+    if (status == DIC_STATUS_OK)
+        status = j2k_image_payload_append(payload, packet->data, packet_header_size);
+    if (status == DIC_STATUS_OK)
+        status = j2k_image_payload_append_u16_be(payload, j2k_MARKER_EPH);
     if (status == DIC_STATUS_OK)
     {
         size_t packet_body_size = packet->size - packet_header_size;
 
         if (packet_body_size > 0u)
         {
-            status = dic_j2k_image_payload_append(
+            status = j2k_image_payload_append(
                 payload,
                 packet->data + packet_header_size,
                 packet_body_size
@@ -225,13 +200,13 @@ static dic_status dic_j2k_image_payload_append_packet(
     return status;
 }
 
-static dic_status dic_j2k_image_stream_list_push_empty(
-    dic_j2k_image_stream_list *list,
-    dic_j2k_codeblock_stream **stream
+static dic_status j2k_image_stream_list_push_empty(
+    j2k_image_stream_list *list,
+    j2k_codeblock_stream **stream
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_codeblock_stream *new_streams;
+    j2k_DEBUG_ENTER();
+    j2k_codeblock_stream *new_streams;
     size_t new_capacity;
 
     if (list == NULL || stream == NULL)
@@ -242,7 +217,7 @@ static dic_status dic_j2k_image_stream_list_push_empty(
         new_capacity = list->capacity == 0u ? 8u : list->capacity * 2u;
         if (new_capacity < list->capacity)
             return DIC_STATUS_INVALID_ARGUMENT;
-        new_streams = (dic_j2k_codeblock_stream *)realloc(
+        new_streams = (j2k_codeblock_stream *)realloc(
             list->streams,
             new_capacity * sizeof(list->streams[0])
         );
@@ -250,7 +225,7 @@ static dic_status dic_j2k_image_stream_list_push_empty(
             return DIC_STATUS_MEMORY_ERROR;
         list->streams = new_streams;
         for (; list->capacity < new_capacity; ++list->capacity)
-            dic_j2k_codeblock_stream_init(list->streams + list->capacity);
+            j2k_codeblock_stream_init(list->streams + list->capacity);
     }
 
     *stream = list->streams + list->count;
@@ -259,16 +234,16 @@ static dic_status dic_j2k_image_stream_list_push_empty(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex G.1 Figures G.1-G.2, unsigned 8-bit tile-components are DC level shifted before DWT. */
-static int32_t dic_j2k_image_level_shift(uint8_t sample)
+static int32_t j2k_image_level_shift(uint8_t sample)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     return (int32_t)sample - 128;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex F.4, FDWT is iterated over the LL region only; tiny images therefore use fewer levels. */
-static int dic_j2k_image_effective_levels(int width, int height, int requested_levels)
+static int j2k_image_effective_levels(int width, int height, int requested_levels)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int levels = 0;
 
     while (levels < requested_levels && width >= 2 && height >= 2)
@@ -282,12 +257,12 @@ static int dic_j2k_image_effective_levels(int width, int height, int requested_l
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex G.1-G.2, unsigned samples are level shifted and RGB input uses the reversible component transform when COD MCT is set. */
-static dic_status dic_j2k_image_make_planes(
+static dic_status j2k_image_make_planes(
     const dic_image_u8 *image,
     int32_t **planes_out
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t pixel_count;
     int32_t *planes;
     size_t pixel;
@@ -309,7 +284,7 @@ static dic_status dic_j2k_image_make_planes(
     if (image->channels == 1)
     {
         for (pixel = 0u; pixel < pixel_count; ++pixel)
-            planes[pixel] = dic_j2k_image_level_shift(image->data[pixel]);
+            planes[pixel] = j2k_image_level_shift(image->data[pixel]);
     }
     else
     {
@@ -325,10 +300,10 @@ static dic_status dic_j2k_image_make_planes(
         {
             for (component = 0; component < 3; ++component)
                 interleaved[pixel * 3u + (size_t)component] =
-                    dic_j2k_image_level_shift(image->data[pixel * 3u + (size_t)component]);
+                    j2k_image_level_shift(image->data[pixel * 3u + (size_t)component]);
         }
 
-        status = dic_j2k_rct_forward(interleaved, pixel_count);
+        status = j2k_rct_forward(interleaved, pixel_count);
         if (status != DIC_STATUS_OK)
         {
             free(interleaved);
@@ -349,20 +324,20 @@ static dic_status dic_j2k_image_make_planes(
     return DIC_STATUS_OK;
 }
 
-static dic_j2k_subband_orientation dic_j2k_image_orientation(dic_subband_orientation orientation)
+static j2k_subband_orientation j2k_image_orientation(dic_subband_orientation orientation)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     if (orientation == DIC_SUBBAND_HL)
-        return DIC_J2K_SUBBAND_HL;
+        return j2k_SUBBAND_HL;
     if (orientation == DIC_SUBBAND_HH)
-        return DIC_J2K_SUBBAND_HH;
-    return DIC_J2K_SUBBAND_LL_LH;
+        return j2k_SUBBAND_HH;
+    return j2k_SUBBAND_LL_LH;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.6.1 Table A.21, 15/15 is the explicit maximum precinct size. */
-static void dic_j2k_image_set_max_precincts(dic_j2k_basic_params *params)
+static void j2k_image_set_max_precincts(j2k_basic_params *params)
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint8_t resolution;
 
     params->use_precincts = 1u;
@@ -374,39 +349,39 @@ static void dic_j2k_image_set_max_precincts(dic_j2k_basic_params *params)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.7, sub-bands are partitioned into rectangular code-blocks anchored on the code-block grid. */
-static dic_status dic_j2k_image_append_subband_streams(
+static dic_status j2k_image_append_subband_streams(
     const int32_t *plane,
     int plane_width,
     const dic_rect_i32 *rect,
-    dic_j2k_subband_orientation orientation,
+    j2k_subband_orientation orientation,
     uint32_t nominal_bitplanes,
-    dic_j2k_image_stream_list *streams
+    j2k_image_stream_list *streams
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int by;
     dic_status status = DIC_STATUS_OK;
 
     if (plane == NULL || rect == NULL || streams == NULL || rect->width <= 0 || rect->height <= 0)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    for (by = 0; by < rect->height; by += DIC_J2K_IMAGE_CODEBLOCK_SIZE)
+    for (by = 0; by < rect->height; by += j2k_IMAGE_CODEBLOCK_SIZE)
     {
         int bx;
-        int block_height = rect->height - by < DIC_J2K_IMAGE_CODEBLOCK_SIZE
+        int block_height = rect->height - by < j2k_IMAGE_CODEBLOCK_SIZE
             ? rect->height - by
-            : DIC_J2K_IMAGE_CODEBLOCK_SIZE;
+            : j2k_IMAGE_CODEBLOCK_SIZE;
 
-        for (bx = 0; bx < rect->width; bx += DIC_J2K_IMAGE_CODEBLOCK_SIZE)
+        for (bx = 0; bx < rect->width; bx += j2k_IMAGE_CODEBLOCK_SIZE)
         {
-            int block_width = rect->width - bx < DIC_J2K_IMAGE_CODEBLOCK_SIZE
+            int block_width = rect->width - bx < j2k_IMAGE_CODEBLOCK_SIZE
                 ? rect->width - bx
-                : DIC_J2K_IMAGE_CODEBLOCK_SIZE;
+                : j2k_IMAGE_CODEBLOCK_SIZE;
             int32_t *block = NULL;
-            dic_j2k_codeblock_stream *stream = NULL;
+            j2k_codeblock_stream *stream = NULL;
             int y;
 
-            status = dic_j2k_image_stream_list_push_empty(streams, &stream);
+            status = j2k_image_stream_list_push_empty(streams, &stream);
             if (status != DIC_STATUS_OK)
                 break;
 
@@ -424,7 +399,7 @@ static dic_status dic_j2k_image_append_subband_streams(
                     (size_t)block_width * sizeof(block[0])
                 );
             }
-            status = dic_j2k_ebcot_encode_codeblock_rect(
+            status = j2k_ebcot_encode_codeblock_rect(
                 block,
                 (uint32_t)block_width,
                 (uint32_t)block_height,
@@ -450,7 +425,7 @@ static dic_status dic_j2k_image_append_subband_streams(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.8, one packet of a resolution/component contains LL or the ordered HL, LH, HH sub-band contributions. */
-static dic_status dic_j2k_image_append_resolution_packet(
+static dic_status j2k_image_append_resolution_packet(
     int32_t *plane,
     int width,
     int height,
@@ -461,24 +436,24 @@ static dic_status dic_j2k_image_append_resolution_packet(
     uint16_t layer_index,
     uint16_t layers,
     uint16_t packet_sequence,
-    dic_j2k_image_payload *payload
+    j2k_image_payload *payload
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_image_stream_list subband_streams[3];
-    dic_j2k_packet_subband_payload subbands[3];
+    j2k_DEBUG_ENTER();
+    j2k_image_stream_list subband_streams[3];
+    j2k_packet_subband_payload subbands[3];
     size_t subband_count = 0u;
     size_t subband_index;
-    dic_j2k_packet_header packet;
+    j2k_packet_header packet;
     size_t packet_header_size = 0u;
     dic_status status = DIC_STATUS_OK;
 
     for (subband_index = 0u; subband_index < 3u; ++subband_index)
     {
-        dic_j2k_image_stream_list_init(subband_streams + subband_index);
+        j2k_image_stream_list_init(subband_streams + subband_index);
         memset(subbands + subband_index, 0, sizeof(subbands[subband_index]));
     }
-    dic_j2k_packet_header_init(&packet);
+    j2k_packet_header_init(&packet);
 
     if (resolution == 0)
     {
@@ -497,11 +472,11 @@ static dic_status dic_j2k_image_append_resolution_packet(
         }
         if (status == DIC_STATUS_OK)
         {
-            status = dic_j2k_image_append_subband_streams(
+            status = j2k_image_append_subband_streams(
                 plane,
                 width,
                 &rect,
-                DIC_J2K_SUBBAND_LL_LH,
+                j2k_SUBBAND_LL_LH,
                 9u + component_extra_bits + roi_extra_bits,
                 subband_streams
             );
@@ -509,8 +484,8 @@ static dic_status dic_j2k_image_append_resolution_packet(
             {
                 subbands[0].streams = subband_streams[0].streams;
                 subbands[0].stream_count = subband_streams[0].count;
-                subbands[0].blocks_x = (rect.width + DIC_J2K_IMAGE_CODEBLOCK_SIZE - 1) / DIC_J2K_IMAGE_CODEBLOCK_SIZE;
-                subbands[0].blocks_y = (rect.height + DIC_J2K_IMAGE_CODEBLOCK_SIZE - 1) / DIC_J2K_IMAGE_CODEBLOCK_SIZE;
+                subbands[0].blocks_x = (rect.width + j2k_IMAGE_CODEBLOCK_SIZE - 1) / j2k_IMAGE_CODEBLOCK_SIZE;
+                subbands[0].blocks_y = (rect.height + j2k_IMAGE_CODEBLOCK_SIZE - 1) / j2k_IMAGE_CODEBLOCK_SIZE;
                 subband_count = 1u;
             }
         }
@@ -532,11 +507,11 @@ static dic_status dic_j2k_image_append_resolution_packet(
             status = dic_subband_rect(width, height, levels, level, orientations[index], &rect);
             if (status != DIC_STATUS_OK)
                 break;
-            status = dic_j2k_image_append_subband_streams(
+            status = j2k_image_append_subband_streams(
                 plane,
                 width,
                 &rect,
-                dic_j2k_image_orientation(orientations[index]),
+                j2k_image_orientation(orientations[index]),
                 (orientations[index] == DIC_SUBBAND_HH ? 11u : 10u) + component_extra_bits + roi_extra_bits,
                 subband_streams + index
             );
@@ -544,15 +519,15 @@ static dic_status dic_j2k_image_append_resolution_packet(
                 break;
             subbands[index].streams = subband_streams[index].streams;
             subbands[index].stream_count = subband_streams[index].count;
-            subbands[index].blocks_x = (rect.width + DIC_J2K_IMAGE_CODEBLOCK_SIZE - 1) / DIC_J2K_IMAGE_CODEBLOCK_SIZE;
-            subbands[index].blocks_y = (rect.height + DIC_J2K_IMAGE_CODEBLOCK_SIZE - 1) / DIC_J2K_IMAGE_CODEBLOCK_SIZE;
+            subbands[index].blocks_x = (rect.width + j2k_IMAGE_CODEBLOCK_SIZE - 1) / j2k_IMAGE_CODEBLOCK_SIZE;
+            subbands[index].blocks_y = (rect.height + j2k_IMAGE_CODEBLOCK_SIZE - 1) / j2k_IMAGE_CODEBLOCK_SIZE;
             subband_count = index + 1u;
         }
     }
 
     if (status == DIC_STATUS_OK)
     {
-        status = dic_j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
+        status = j2k_packet_build_tagged_ebcot_layer_payload_with_header_size(
             subbands,
             subband_count,
             layer_index,
@@ -561,17 +536,17 @@ static dic_status dic_j2k_image_append_resolution_packet(
             &packet_header_size
         );
         if (status == DIC_STATUS_OK)
-            status = dic_j2k_image_payload_append_packet(payload, &packet, packet_header_size, packet_sequence);
+            status = j2k_image_payload_append_packet(payload, &packet, packet_header_size, packet_sequence);
     }
 
-    dic_j2k_packet_header_free(&packet);
+    j2k_packet_header_free(&packet);
     for (subband_index = 0u; subband_index < 3u; ++subband_index)
-        dic_j2k_image_stream_list_free(subband_streams + subband_index);
+        j2k_image_stream_list_free(subband_streams + subband_index);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.8, LRCP packet order visits layers, resolution levels, components, then precinct data. */
-static dic_status dic_j2k_image_build_payload(
+static dic_status j2k_image_build_payload(
     int32_t *planes,
     int width,
     int height,
@@ -579,10 +554,10 @@ static dic_status dic_j2k_image_build_payload(
     int levels,
     uint16_t layers,
     uint8_t roi_shift,
-    dic_j2k_image_payload *payload
+    j2k_image_payload *payload
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     uint16_t layer;
     int resolution;
     int component;
@@ -602,7 +577,7 @@ static dic_status dic_j2k_image_build_payload(
                 int32_t *plane = planes + (size_t)component * plane_samples;
                 uint32_t component_extra_bits = channels == 3 && component > 0 ? 1u : 0u;
 
-                status = dic_j2k_image_append_resolution_packet(
+                status = j2k_image_append_resolution_packet(
                     plane,
                     width,
                     height,
@@ -625,7 +600,7 @@ static dic_status dic_j2k_image_build_payload(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.5.1 and Annex B.5, tile-components are coded independently in tile grid order. */
-static dic_status dic_j2k_image_copy_tile(
+static dic_status j2k_image_copy_tile(
     const dic_image_u8 *image,
     int tile_x,
     int tile_y,
@@ -634,7 +609,7 @@ static dic_status dic_j2k_image_copy_tile(
     dic_image_u8 *tile
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int y;
     dic_status status;
 
@@ -659,44 +634,44 @@ static dic_status dic_j2k_image_copy_tile(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.5.1, every tile in the grid contributes at least one tile-part. */
-static dic_status dic_j2k_image_alloc_tile_payloads(
+static dic_status j2k_image_alloc_tile_payloads(
     size_t tile_count,
-    dic_j2k_image_tile_payloads *tile_payloads
+    j2k_image_tile_payloads *tile_payloads
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     size_t index;
 
     if (tile_payloads == NULL || tile_count == 0u || tile_count > UINT16_MAX + 1u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    dic_j2k_image_tile_payloads_free(tile_payloads);
-    tile_payloads->tile_parts = (dic_j2k_tile_part_payload *)calloc(tile_count, sizeof(tile_payloads->tile_parts[0]));
-    tile_payloads->payloads = (dic_j2k_image_payload *)calloc(tile_count, sizeof(tile_payloads->payloads[0]));
+    j2k_image_tile_payloads_free(tile_payloads);
+    tile_payloads->tile_parts = (j2k_tile_part_payload *)calloc(tile_count, sizeof(tile_payloads->tile_parts[0]));
+    tile_payloads->payloads = (j2k_image_payload *)calloc(tile_count, sizeof(tile_payloads->payloads[0]));
     if (tile_payloads->tile_parts == NULL || tile_payloads->payloads == NULL)
     {
-        dic_j2k_image_tile_payloads_free(tile_payloads);
+        j2k_image_tile_payloads_free(tile_payloads);
         return DIC_STATUS_MEMORY_ERROR;
     }
 
     tile_payloads->count = tile_count;
     for (index = 0u; index < tile_count; ++index)
-        dic_j2k_image_payload_init(tile_payloads->payloads + index);
+        j2k_image_payload_init(tile_payloads->payloads + index);
     return DIC_STATUS_OK;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex F.4 and Annex B.10, transformed tile-components are entropy coded into packetized code-block contributions. */
-static dic_status dic_j2k_image_encode_payload(
+static dic_status j2k_image_encode_payload(
     const dic_image_u8 *image,
     int requested_levels,
     uint16_t layers,
     const dic_rect_i32 *roi_rect,
     uint8_t roi_shift,
-    dic_j2k_basic_params *params,
-    dic_j2k_image_payload *payload
+    j2k_basic_params *params,
+    j2k_image_payload *payload
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int32_t *planes = NULL;
     uint8_t *roi_shift_map = NULL;
     dic_status status;
@@ -711,13 +686,13 @@ static dic_status dic_j2k_image_encode_payload(
     if (image->width <= 0 || image->height <= 0 || (image->channels != 1 && image->channels != 3))
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    levels = dic_j2k_image_effective_levels(image->width, image->height, requested_levels);
-    status = dic_j2k_image_make_planes(image, &planes);
+    levels = j2k_image_effective_levels(image->width, image->height, requested_levels);
+    status = j2k_image_make_planes(image, &planes);
     if (status != DIC_STATUS_OK)
         return status;
     if (roi_shift > 0u)
     {
-        status = dic_j2k_roi_build_shift_map(
+        status = j2k_roi_build_shift_map(
             image->width,
             image->height,
             levels,
@@ -740,7 +715,7 @@ static dic_status dic_j2k_image_encode_payload(
             if (status != DIC_STATUS_OK)
                 break;
         }
-        status = dic_j2k_roi_apply_shift_map(
+        status = j2k_roi_apply_shift_map(
             planes + (size_t)component * plane_samples,
             image->width,
             image->height,
@@ -750,7 +725,7 @@ static dic_status dic_j2k_image_encode_payload(
     }
 
     if (status == DIC_STATUS_OK)
-        status = dic_j2k_image_build_payload(
+        status = j2k_image_build_payload(
             planes,
             image->width,
             image->height,
@@ -773,7 +748,7 @@ static dic_status dic_j2k_image_encode_payload(
         params->roi_shift = roi_shift;
         params->use_sop = 1u;
         params->use_eph = 1u;
-        dic_j2k_image_set_max_precincts(params);
+        j2k_image_set_max_precincts(params);
     }
 
     free(roi_shift_map);
@@ -782,16 +757,16 @@ static dic_status dic_j2k_image_encode_payload(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.5.1, main-header SIZ describes the full reference grid and regular tile size. */
-static void dic_j2k_image_set_main_params(
+static void j2k_image_set_main_params(
     const dic_image_u8 *image,
     int levels,
     int tile_width,
     int tile_height,
     uint16_t layers,
-    dic_j2k_basic_params *params
+    j2k_basic_params *params
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
 
     params->width = (uint32_t)image->width;
     params->height = (uint32_t)image->height;
@@ -804,21 +779,21 @@ static void dic_j2k_image_set_main_params(
     params->tile_height = tile_height == image->height ? 0u : (uint32_t)tile_height;
     params->use_sop = 1u;
     params->use_eph = 1u;
-    dic_j2k_image_set_max_precincts(params);
+    j2k_image_set_max_precincts(params);
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.5-B.10, each tile is transformed and packetized independently. */
-static dic_status dic_j2k_image_encode_tile_parts(
+static dic_status j2k_image_encode_tile_parts(
     const dic_image_u8 *image,
     int requested_levels,
     int tile_width,
     int tile_height,
     uint16_t layers,
-    dic_j2k_basic_params *params,
-    dic_j2k_image_tile_payloads *tile_payloads
+    j2k_basic_params *params,
+    j2k_image_tile_payloads *tile_payloads
 )
 {
-    DIC_J2K_DEBUG_ENTER();
+    j2k_DEBUG_ENTER();
     int tiles_x;
     int tiles_y;
     int tile_index = 0;
@@ -847,14 +822,14 @@ static dic_status dic_j2k_image_encode_tile_parts(
         {
             int current_width = tx + 1 == tiles_x ? image->width - tx * tile_width : tile_width;
             int current_height = ty + 1 == tiles_y ? image->height - ty * tile_height : tile_height;
-            int effective = dic_j2k_image_effective_levels(current_width, current_height, requested_levels);
+            int effective = j2k_image_effective_levels(current_width, current_height, requested_levels);
 
             if (effective < levels)
                 levels = effective;
         }
     }
 
-    status = dic_j2k_image_alloc_tile_payloads((size_t)tiles_x * (size_t)tiles_y, tile_payloads);
+    status = j2k_image_alloc_tile_payloads((size_t)tiles_x * (size_t)tiles_y, tile_payloads);
     if (status != DIC_STATUS_OK)
         return status;
 
@@ -867,11 +842,11 @@ static dic_status dic_j2k_image_encode_tile_parts(
             int current_width = tx + 1 == tiles_x ? image->width - tx * tile_width : tile_width;
             int current_height = ty + 1 == tiles_y ? image->height - ty * tile_height : tile_height;
             dic_image_u8 tile;
-            dic_j2k_basic_params tile_params;
+            j2k_basic_params tile_params;
 
             dic_image_u8_init(&tile);
             memset(&tile_params, 0, sizeof(tile_params));
-            status = dic_j2k_image_copy_tile(
+            status = j2k_image_copy_tile(
                 image,
                 tx * tile_width,
                 ty * tile_height,
@@ -881,7 +856,7 @@ static dic_status dic_j2k_image_encode_tile_parts(
             );
             if (status == DIC_STATUS_OK)
             {
-                status = dic_j2k_image_encode_payload(
+                status = j2k_image_encode_payload(
                     &tile,
                     levels,
                     layers,
@@ -905,36 +880,36 @@ static dic_status dic_j2k_image_encode_tile_parts(
     }
 
     if (status == DIC_STATUS_OK)
-        dic_j2k_image_set_main_params(image, levels, tile_width, tile_height, layers, params);
+        j2k_image_set_main_params(image, levels, tile_width, tile_height, layers, params);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex A.3-A.4, a raw codestream is main header, one tile-part SOD payload, and EOC. */
-dic_status dic_j2k_write_image_codestream(
+dic_status j2k_write_image_codestream(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_basic_params params = {0};
-    dic_j2k_image_payload payload;
+    j2k_DEBUG_ENTER();
+    j2k_basic_params params = {0};
+    j2k_image_payload payload;
     dic_status status;
 
-    dic_j2k_image_payload_init(&payload);
+    j2k_image_payload_init(&payload);
     if (path == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_image_encode_payload(image, requested_levels, 1u, NULL, 0u, &params, &payload);
+    status = j2k_image_encode_payload(image, requested_levels, 1u, NULL, 0u, &params, &payload);
     if (status == DIC_STATUS_OK)
-        status = dic_j2k_write_codestream_with_payload(path, &params, payload.data, payload.size);
+        status = j2k_write_codestream_with_payload(path, &params, payload.data, payload.size);
 
-    dic_j2k_image_payload_free(&payload);
+    j2k_image_payload_free(&payload);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex H.2-H.3, ROI Maxshift applies a wavelet-domain coefficient mask before EBCOT coding. */
-dic_status dic_j2k_write_image_codestream_roi(
+dic_status j2k_write_image_codestream_roi(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels,
@@ -942,25 +917,25 @@ dic_status dic_j2k_write_image_codestream_roi(
     uint8_t roi_shift
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_basic_params params = {0};
-    dic_j2k_image_payload payload;
+    j2k_DEBUG_ENTER();
+    j2k_basic_params params = {0};
+    j2k_image_payload payload;
     dic_status status;
 
-    dic_j2k_image_payload_init(&payload);
+    j2k_image_payload_init(&payload);
     if (path == NULL || roi_rect == NULL || roi_shift == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_image_encode_payload(image, requested_levels, 1u, roi_rect, roi_shift, &params, &payload);
+    status = j2k_image_encode_payload(image, requested_levels, 1u, roi_rect, roi_shift, &params, &payload);
     if (status == DIC_STATUS_OK)
-        status = dic_j2k_write_codestream_with_payload(path, &params, payload.data, payload.size);
+        status = j2k_write_codestream_with_payload(path, &params, payload.data, payload.size);
 
-    dic_j2k_image_payload_free(&payload);
+    j2k_image_payload_free(&payload);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.3-A.5, a tiled codestream writes one SOT/SOD tile-part per tile. */
-dic_status dic_j2k_write_image_codestream_tiled(
+dic_status j2k_write_image_codestream_tiled(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels,
@@ -969,16 +944,16 @@ dic_status dic_j2k_write_image_codestream_tiled(
     uint16_t layers
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_basic_params params = {0};
-    dic_j2k_image_tile_payloads tile_payloads;
+    j2k_DEBUG_ENTER();
+    j2k_basic_params params = {0};
+    j2k_image_tile_payloads tile_payloads;
     dic_status status;
 
-    dic_j2k_image_tile_payloads_init(&tile_payloads);
+    j2k_image_tile_payloads_init(&tile_payloads);
     if (path == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_image_encode_tile_parts(
+    status = j2k_image_encode_tile_parts(
         image,
         requested_levels,
         tile_width,
@@ -989,7 +964,7 @@ dic_status dic_j2k_write_image_codestream_tiled(
     );
     if (status == DIC_STATUS_OK)
     {
-        status = dic_j2k_write_codestream_with_tile_parts(
+        status = j2k_write_codestream_with_tile_parts(
             path,
             &params,
             tile_payloads.tile_parts,
@@ -997,36 +972,36 @@ dic_status dic_j2k_write_image_codestream_tiled(
         );
     }
 
-    dic_j2k_image_tile_payloads_free(&tile_payloads);
+    j2k_image_tile_payloads_free(&tile_payloads);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1, JP2 stores the same codestream in a Contiguous Codestream box. */
-dic_status dic_j2k_write_image_jp2(
+dic_status j2k_write_image_jp2(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_basic_params params = {0};
-    dic_j2k_image_payload payload;
+    j2k_DEBUG_ENTER();
+    j2k_basic_params params = {0};
+    j2k_image_payload payload;
     dic_status status;
 
-    dic_j2k_image_payload_init(&payload);
+    j2k_image_payload_init(&payload);
     if (path == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_image_encode_payload(image, requested_levels, 1u, NULL, 0u, &params, &payload);
+    status = j2k_image_encode_payload(image, requested_levels, 1u, NULL, 0u, &params, &payload);
     if (status == DIC_STATUS_OK)
-        status = dic_jp2_write_file_with_codestream_payload(path, &params, payload.data, payload.size);
+        status = jp2_write_file_with_codestream_payload(path, &params, payload.data, payload.size);
 
-    dic_j2k_image_payload_free(&payload);
+    j2k_image_payload_free(&payload);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1 and Annex H, JP2 wraps the ROI-shifted codestream and RGN marker. */
-dic_status dic_j2k_write_image_jp2_roi(
+dic_status j2k_write_image_jp2_roi(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels,
@@ -1034,25 +1009,25 @@ dic_status dic_j2k_write_image_jp2_roi(
     uint8_t roi_shift
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_basic_params params = {0};
-    dic_j2k_image_payload payload;
+    j2k_DEBUG_ENTER();
+    j2k_basic_params params = {0};
+    j2k_image_payload payload;
     dic_status status;
 
-    dic_j2k_image_payload_init(&payload);
+    j2k_image_payload_init(&payload);
     if (path == NULL || roi_rect == NULL || roi_shift == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_image_encode_payload(image, requested_levels, 1u, roi_rect, roi_shift, &params, &payload);
+    status = j2k_image_encode_payload(image, requested_levels, 1u, roi_rect, roi_shift, &params, &payload);
     if (status == DIC_STATUS_OK)
-        status = dic_jp2_write_file_with_codestream_payload(path, &params, payload.data, payload.size);
+        status = jp2_write_file_with_codestream_payload(path, &params, payload.data, payload.size);
 
-    dic_j2k_image_payload_free(&payload);
+    j2k_image_payload_free(&payload);
     return status;
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1, JP2 stores the complete multi-tile codestream in one jp2c box. */
-dic_status dic_j2k_write_image_jp2_tiled(
+dic_status j2k_write_image_jp2_tiled(
     const char *path,
     const dic_image_u8 *image,
     int requested_levels,
@@ -1061,16 +1036,16 @@ dic_status dic_j2k_write_image_jp2_tiled(
     uint16_t layers
 )
 {
-    DIC_J2K_DEBUG_ENTER();
-    dic_j2k_basic_params params = {0};
-    dic_j2k_image_tile_payloads tile_payloads;
+    j2k_DEBUG_ENTER();
+    j2k_basic_params params = {0};
+    j2k_image_tile_payloads tile_payloads;
     dic_status status;
 
-    dic_j2k_image_tile_payloads_init(&tile_payloads);
+    j2k_image_tile_payloads_init(&tile_payloads);
     if (path == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_j2k_image_encode_tile_parts(
+    status = j2k_image_encode_tile_parts(
         image,
         requested_levels,
         tile_width,
@@ -1081,7 +1056,7 @@ dic_status dic_j2k_write_image_jp2_tiled(
     );
     if (status == DIC_STATUS_OK)
     {
-        status = dic_jp2_write_file_with_codestream_tile_parts(
+        status = jp2_write_file_with_codestream_tile_parts(
             path,
             &params,
             tile_payloads.tile_parts,
@@ -1089,6 +1064,6 @@ dic_status dic_j2k_write_image_jp2_tiled(
         );
     }
 
-    dic_j2k_image_tile_payloads_free(&tile_payloads);
+    j2k_image_tile_payloads_free(&tile_payloads);
     return status;
 }

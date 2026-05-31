@@ -3,9 +3,9 @@
 #include <string.h>
 
 #include "image_u8/image_u8.h"
-#include "j2k/dic_j2k_image.h"
-#include "j2k/dic_j2k_parse.h"
-#include "j2k/dic_j2k_roi.h"
+#include "j2k/j2k_image.h"
+#include "j2k/j2k_parse.h"
+#include "j2k/j2k_roi.h"
 #include "test_helpers.h"
 
 static int dic_test_read_u16_be(FILE *file, unsigned int *value)
@@ -43,9 +43,9 @@ static int dic_test_j2k_payload_starts_with_sop_and_has_eph(
     {
         unsigned int length;
 
-        if (marker == DIC_J2K_MARKER_SOD)
+        if (marker == j2k_MARKER_SOD)
             break;
-        if (marker == DIC_J2K_MARKER_SOC)
+        if (marker == j2k_MARKER_SOC)
             continue;
         if (!dic_test_read_u16_be(file, &length) || fseek(file, (long)length - 2L, SEEK_CUR) != 0)
         {
@@ -54,12 +54,12 @@ static int dic_test_j2k_payload_starts_with_sop_and_has_eph(
         }
     }
 
-    if (marker != DIC_J2K_MARKER_SOD)
+    if (marker != j2k_MARKER_SOD)
     {
         fclose(file);
         return 0;
     }
-    if (!dic_test_read_u16_be(file, &marker) || marker != DIC_J2K_MARKER_SOP)
+    if (!dic_test_read_u16_be(file, &marker) || marker != j2k_MARKER_SOP)
     {
         fclose(file);
         return 0;
@@ -97,15 +97,15 @@ static int dic_test_seek_to_sod_payload(FILE *file)
 {
     unsigned int marker = 0u;
 
-    if (!dic_test_read_u16_be(file, &marker) || marker != DIC_J2K_MARKER_SOC)
+    if (!dic_test_read_u16_be(file, &marker) || marker != j2k_MARKER_SOC)
         return 0;
     while (dic_test_read_u16_be(file, &marker))
     {
         unsigned int length;
 
-        if (marker == DIC_J2K_MARKER_SOD)
+        if (marker == j2k_MARKER_SOD)
             return 1;
-        if (marker == DIC_J2K_MARKER_EOC)
+        if (marker == j2k_MARKER_EOC)
             return 0;
         if (!dic_test_read_u16_be(file, &length) || length < 2u)
             return 0;
@@ -189,8 +189,8 @@ int main(void)
     dic_image_u8 gray;
     dic_image_u8 rgb;
     dic_image_u8 decoded;
-    dic_j2k_codestream_info info;
-    dic_j2k_codestream_info roi_info;
+    j2k_codestream_info info;
+    j2k_codestream_info roi_info;
     dic_rect_i32 roi_rect = { 2, 2, 3, 3 };
     uint8_t *roi_shift_map = NULL;
     int x;
@@ -208,8 +208,8 @@ int main(void)
             gray.data[(size_t)y * (size_t)gray.width + (size_t)x] = (uint8_t)(x * 17 + y * 11);
     }
 
-    DIC_EXPECT(dic_j2k_write_image_codestream(j2k_path, &gray, 5) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_j2k_read_codestream_info(j2k_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_image_codestream(j2k_path, &gray, 5) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_codestream_info(j2k_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == 8u);
     DIC_EXPECT(info.params.height == 8u);
     DIC_EXPECT(info.params.components == 1u);
@@ -224,20 +224,20 @@ int main(void)
     }
     DIC_EXPECT(info.tile_part_payload_bytes > 4u);
     DIC_EXPECT(dic_test_j2k_payload_starts_with_sop_and_has_eph(j2k_path, info.tile_part_payload_bytes));
-    DIC_EXPECT(dic_j2k_read_image_codestream(j2k_path, &decoded) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_image_codestream(j2k_path, &decoded) == DIC_STATUS_OK);
     DIC_EXPECT(decoded.width == gray.width);
     DIC_EXPECT(decoded.height == gray.height);
     DIC_EXPECT(decoded.channels == gray.channels);
     DIC_EXPECT(memcmp(decoded.data, gray.data, dic_image_u8_sample_count(gray.width, gray.height, gray.channels)) == 0);
     dic_image_u8_free(&decoded);
 
-    DIC_EXPECT(dic_j2k_roi_build_shift_map(gray.width, gray.height, 3, &roi_rect, &roi_shift_map) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_roi_build_shift_map(gray.width, gray.height, 3, &roi_rect, &roi_shift_map) == DIC_STATUS_OK);
     DIC_EXPECT(roi_shift_map != NULL);
     DIC_EXPECT(roi_shift_map[(size_t)roi_rect.y * (size_t)gray.width + (size_t)roi_rect.x] != 0u);
     free(roi_shift_map);
     roi_shift_map = NULL;
-    DIC_EXPECT(dic_j2k_write_image_codestream_roi(roi_j2k_path, &gray, 5, &roi_rect, 4u) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_j2k_read_codestream_info(roi_j2k_path, &roi_info) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_image_codestream_roi(roi_j2k_path, &gray, 5, &roi_rect, 4u) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_codestream_info(roi_j2k_path, &roi_info) == DIC_STATUS_OK);
     DIC_EXPECT(roi_info.params.roi_shift == 4u);
     DIC_EXPECT(dic_test_j2k_sod_payload_differs(
         j2k_path,
@@ -248,8 +248,8 @@ int main(void)
     remove(roi_j2k_path);
     remove(j2k_path);
 
-    DIC_EXPECT(dic_j2k_write_image_codestream_tiled(tiled_j2k_path, &gray, 5, 4, 4, 3u) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_j2k_read_codestream_info(tiled_j2k_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_image_codestream_tiled(tiled_j2k_path, &gray, 5, 4, 4, 3u) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_codestream_info(tiled_j2k_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == 8u);
     DIC_EXPECT(info.params.height == 8u);
     DIC_EXPECT(info.params.tile_width == 4u);
@@ -257,13 +257,13 @@ int main(void)
     DIC_EXPECT(info.params.layers == 3u);
     DIC_EXPECT(info.tile_part_count == 4u);
     DIC_EXPECT(info.total_tile_part_payload_bytes > info.tile_part_payload_bytes);
-    DIC_EXPECT(dic_j2k_read_image_codestream_layers(tiled_j2k_path, 1u, &decoded) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_image_codestream_layers(tiled_j2k_path, 1u, &decoded) == DIC_STATUS_OK);
     DIC_EXPECT(decoded.width == gray.width);
     DIC_EXPECT(decoded.height == gray.height);
     DIC_EXPECT(decoded.channels == gray.channels);
     dic_image_u8_free(&decoded);
-    DIC_EXPECT(dic_j2k_read_image_codestream_layers(tiled_j2k_path, 4u, &decoded) == DIC_STATUS_INVALID_ARGUMENT);
-    DIC_EXPECT(dic_j2k_read_image_codestream(tiled_j2k_path, &decoded) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_image_codestream_layers(tiled_j2k_path, 4u, &decoded) == DIC_STATUS_INVALID_ARGUMENT);
+    DIC_EXPECT(j2k_read_image_codestream(tiled_j2k_path, &decoded) == DIC_STATUS_OK);
     DIC_EXPECT(decoded.width == gray.width);
     DIC_EXPECT(decoded.height == gray.height);
     DIC_EXPECT(decoded.channels == gray.channels);
@@ -284,8 +284,8 @@ int main(void)
         }
     }
 
-    DIC_EXPECT(dic_j2k_write_image_jp2(jp2_path, &rgb, 5) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_jp2_read_codestream_info(jp2_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_image_jp2(jp2_path, &rgb, 5) == DIC_STATUS_OK);
+    DIC_EXPECT(jp2_read_codestream_info(jp2_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == 7u);
     DIC_EXPECT(info.params.height == 5u);
     DIC_EXPECT(info.params.components == 3u);
@@ -295,7 +295,7 @@ int main(void)
     DIC_EXPECT(info.params.use_eph == 1u);
     DIC_EXPECT(info.params.use_precincts == 1u);
     DIC_EXPECT(info.tile_part_payload_bytes > 8u);
-    DIC_EXPECT(dic_j2k_read_image_jp2(jp2_path, &decoded) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_image_jp2(jp2_path, &decoded) == DIC_STATUS_OK);
     DIC_EXPECT(decoded.width == rgb.width);
     DIC_EXPECT(decoded.height == rgb.height);
     DIC_EXPECT(decoded.channels == rgb.channels);
@@ -303,21 +303,21 @@ int main(void)
     dic_image_u8_free(&decoded);
     remove(jp2_path);
 
-    DIC_EXPECT(dic_j2k_write_image_jp2_tiled(tiled_jp2_path, &rgb, 5, 4, 3, 2u) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_jp2_read_codestream_info(tiled_jp2_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_image_jp2_tiled(tiled_jp2_path, &rgb, 5, 4, 3, 2u) == DIC_STATUS_OK);
+    DIC_EXPECT(jp2_read_codestream_info(tiled_jp2_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == 7u);
     DIC_EXPECT(info.params.height == 5u);
     DIC_EXPECT(info.params.tile_width == 4u);
     DIC_EXPECT(info.params.tile_height == 3u);
     DIC_EXPECT(info.params.layers == 2u);
     DIC_EXPECT(info.tile_part_count == 4u);
-    DIC_EXPECT(dic_j2k_read_image_jp2_layers(tiled_jp2_path, 1u, &decoded) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_image_jp2_layers(tiled_jp2_path, 1u, &decoded) == DIC_STATUS_OK);
     DIC_EXPECT(decoded.width == rgb.width);
     DIC_EXPECT(decoded.height == rgb.height);
     DIC_EXPECT(decoded.channels == rgb.channels);
     dic_image_u8_free(&decoded);
-    DIC_EXPECT(dic_j2k_read_image_jp2_layers(tiled_jp2_path, 3u, &decoded) == DIC_STATUS_INVALID_ARGUMENT);
-    DIC_EXPECT(dic_j2k_read_image_jp2(tiled_jp2_path, &decoded) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_read_image_jp2_layers(tiled_jp2_path, 3u, &decoded) == DIC_STATUS_INVALID_ARGUMENT);
+    DIC_EXPECT(j2k_read_image_jp2(tiled_jp2_path, &decoded) == DIC_STATUS_OK);
     DIC_EXPECT(decoded.width == rgb.width);
     DIC_EXPECT(decoded.height == rgb.height);
     DIC_EXPECT(decoded.channels == rgb.channels);

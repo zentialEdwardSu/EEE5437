@@ -5,76 +5,45 @@ extern "C" {
 #endif
 
 #define FINALPROJ_BITSTREAM_PATH "image.bit"
-#define FINALPROJ_TILED_BITSTREAM_PATH "image_tiled.bit"
-#define FINALPROJ_SNR_BITSTREAM_PATH "image_snr.bit"
-#define FINALPROJ_ROI_BITSTREAM_PATH "image_roi.bit"
 #define FINALPROJ_RECON_GRAY_PATH "image_recon.pgm"
 #define FINALPROJ_RECON_RGB_PATH "image_recon.ppm"
 #define FINALPROJ_LEVELS 5
 
+/** Encodes the assignment basic codec bitstream and returns bitrate in bits per pixel. */
 double imageEncoder(const char *orgImageFileName, int quantizationStepSize);
+
+/** Decodes the assignment basic codec bitstream and returns PSNR against the original image. */
 double imageDecoder(
     const char *bitstreamFileName,
     int quantizationStepSize,
     const char *orgImageFileName
 );
 
-double imageEncoderTiled(
-    const char *orgImageFileName,
-    int quantizationStepSize,
-    int tileSize
-);
-
-double imageDecoderTiled(
-    const char *bitstreamFileName,
-    int quantizationStepSize,
-    const char *orgImageFileName
-);
-
-double imageEncoderSNR(
-    const char *orgImageFileName,
-    int quantizationStepSize
-);
-
-double imageDecoderSNR(
-    const char *bitstreamFileName,
-    int quantizationStepSize,
-    int decodedBitplanes,
-    const char *orgImageFileName
-);
-
-double imageEncoderROI(
-    const char *orgImageFileName,
-    int quantizationStepSize
-);
-
-double imageDecoderROI(
-    const char *bitstreamFileName,
-    int quantizationStepSize,
-    int decodedBitplanes,
-    const char *orgImageFileName
-);
-
+/** Writes a minimal raw J2K codestream stub for metadata and parser demos. */
 int imageWriteJ2KStub(
     const char *orgImageFileName,
     const char *outputFileName
 );
 
+/** Writes a full raw J2K codestream for the supported reversible JPEG 2000 subset. */
 int imageWriteJ2K(
     const char *orgImageFileName,
     const char *outputFileName
 );
 
+/** Writes a minimal JP2 wrapper for metadata and parser demos. */
 int imageWriteJP2Stub(
     const char *orgImageFileName,
     const char *outputFileName
 );
 
+/** Writes a JP2 file for the supported reversible JPEG 2000 subset. */
 int imageWriteJP2(
     const char *orgImageFileName,
     const char *outputFileName
 );
 
+/** Writes a tiled JP2 file with the requested JPEG 2000 quality layer count. */
 int imageWriteJP2Tiled(
     const char *orgImageFileName,
     const char *outputFileName,
@@ -108,7 +77,10 @@ int imageReadJP2Layers(
     int maxLayers
 );
 
+/** Prints raw J2K codestream metadata to stdout. */
 int imageReadJ2KInfo(const char *inputFileName);
+
+/** Prints JP2 codestream metadata to stdout. */
 int imageReadJP2Info(const char *inputFileName);
 
 #ifdef __cplusplus
