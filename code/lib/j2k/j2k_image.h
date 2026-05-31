@@ -10,10 +10,17 @@
 extern "C" {
 #endif
 
+/**
+ * Encodes a raw J2K codestream.
+ *
+ * A quality value of -1 selects the existing reversible 5-3/RCT path. Values
+ * 1 through 100 select the irreversible ICT/9-7 scalar-quantized path.
+ */
 dic_status j2k_write_image_codestream(
     const char *path,
     const dic_image_u8 *image,
-    int requested_levels
+    int requested_levels,
+    int quality
 );
 
 dic_status j2k_write_image_codestream_tiled(
@@ -34,10 +41,17 @@ dic_status j2k_write_image_codestream_roi(
     uint8_t roi_shift
 );
 
+/**
+ * Encodes a JP2 file containing one codestream.
+ *
+ * A quality value of -1 selects the existing reversible 5-3/RCT path. Values
+ * 1 through 100 select the irreversible ICT/9-7 scalar-quantized path.
+ */
 dic_status j2k_write_image_jp2(
     const char *path,
     const dic_image_u8 *image,
-    int requested_levels
+    int requested_levels,
+    int quality
 );
 
 dic_status j2k_write_image_jp2_tiled(

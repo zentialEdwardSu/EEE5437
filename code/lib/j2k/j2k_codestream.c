@@ -21,6 +21,7 @@
 #include "j2k/j2k_debug.h"
 
 #include "j2k/j2k_packet.h"
+#include "j2k/j2k_quant.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -254,15 +255,52 @@ static uint8_t j2k_reversible_qcd_spqcd(unsigned int subband_in_level, uint8_t c
     return (uint8_t)(exponent << 3u);
 }
 
+static unsigned int j2k_irreversible_qcd_range_bits(unsigned int step_index)
+{
+    if (step_index == 0u)
+        return 8u;
+    return ((step_index - 1u) % 3u) == 2u ? 10u : 9u;
+}
+
 /* Reference: paper/T-REC-T.800-200208.pdf, A.6.4 Tables A.27-A.29 and E.2 Equation E-10, reversible QCD syntax. */
 static int j2k_write_qcd(FILE *file, const j2k_basic_params *params)
 {
     j2k_DEBUG_ENTER();
     unsigned int level;
-    uint16_t length = (uint16_t)(4u + 3u * (unsigned int)params->decomposition_levels);
+    unsigned int step_count = 1u + 3u * (unsigned int)params->decomposition_levels;
+
+    if (!params->reversible)
+    {
+        unsigned int step;
+        uint16_t length = (uint16_t)(3u + 2u * step_count);
+
+        if (params->quant_step_count != step_count || params->quant_guard_bits > 7u)
+            return 0;
+        if (!j2k_write_marker(file, j2k_MARKER_QCD)
+            || !j2k_write_u16_be(file, length)
+            || !j2k_write_u8(file, (uint8_t)((params->quant_guard_bits << 5u) | 0x02u)))
+        {
+            return 0;
+        }
+        for (step = 0u; step < step_count; ++step)
+        {
+            uint16_t spqcd;
+
+            if (j2k_quant_encode_irreversible_spqcd(
+                    params->quant_step_sizes[step],
+                    j2k_irreversible_qcd_range_bits(step),
+                    &spqcd
+                ) != DIC_STATUS_OK
+                || !j2k_write_u16_be(file, spqcd))
+            {
+                return 0;
+            }
+        }
+        return 1;
+    }
 
     if (!j2k_write_marker(file, j2k_MARKER_QCD)
-        || !j2k_write_u16_be(file, length)
+        || !j2k_write_u16_be(file, (uint16_t)(4u + 3u * (unsigned int)params->decomposition_levels))
         || !j2k_write_u8(file, 0x40u)
         || !j2k_write_u8(file, j2k_reversible_qcd_spqcd(3u, 0u)))
     {
@@ -350,7 +388,7 @@ static int j2k_write_main_header(FILE *file, const j2k_basic_params *params)
         && j2k_write_siz(file, params)
         && j2k_write_cod(file, params)
         && j2k_write_qcd(file, params)
-        && (params->multiple_component_transform
+        && (params->reversible && params->multiple_component_transform
             ? (j2k_write_qcc(file, params, 1u, 1u)
                 && j2k_write_qcc(file, params, 2u, 1u))
             : 1)

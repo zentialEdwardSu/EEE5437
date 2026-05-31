@@ -15,6 +15,7 @@
 #include "j2k/j2k_debug.h"
 
 #include "j2k/jp2_file.h"
+#include "j2k/j2k_quant.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -188,6 +189,63 @@ static dic_status j2k_parse_rgn(FILE *file, uint16_t length, j2k_codestream_info
     return DIC_STATUS_OK;
 }
 
+static unsigned int j2k_parse_irreversible_qcd_range_bits(unsigned int step_index)
+{
+    if (step_index == 0u)
+        return 8u;
+    return ((step_index - 1u) % 3u) == 2u ? 10u : 9u;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, A.6.4, QCD carries reversible exponents or irreversible scalar expounded SPqcd fields. */
+static dic_status j2k_parse_qcd(FILE *file, uint16_t length, j2k_codestream_info *info)
+{
+    uint8_t sqcd;
+    uint16_t remaining;
+
+    if (length < 3u)
+        return DIC_J2K_FORMAT_ERROR;
+    if (!j2k_read_u8(file, &sqcd))
+        return DIC_STATUS_FILE_READ_ERROR;
+
+    remaining = (uint16_t)(length - 3u);
+    info->params.quant_step_count = 0u;
+    info->params.quant_guard_bits = (uint8_t)(sqcd >> 5);
+    if ((sqcd & 0x1fu) == 0u)
+    {
+        if (remaining > j2k_MAX_QUANT_STEPS)
+            return DIC_J2K_FORMAT_ERROR;
+        if (fseek(file, (long)remaining, SEEK_CUR) != 0)
+            return DIC_STATUS_FILE_READ_ERROR;
+        info->params.quant_step_count = remaining;
+        return DIC_STATUS_OK;
+    }
+    if ((sqcd & 0x1fu) == 2u)
+    {
+        uint16_t index;
+
+        if ((remaining % 2u) != 0u || remaining / 2u > j2k_MAX_QUANT_STEPS)
+            return DIC_J2K_FORMAT_ERROR;
+        for (index = 0u; index < remaining / 2u; ++index)
+        {
+            uint16_t spqcd;
+
+            if (!j2k_read_u16_be(file, &spqcd))
+                return DIC_STATUS_FILE_READ_ERROR;
+            if (j2k_quant_decode_irreversible_spqcd(
+                    spqcd,
+                    j2k_parse_irreversible_qcd_range_bits(index),
+                    info->params.quant_step_sizes + index
+                ) != DIC_STATUS_OK)
+            {
+                return DIC_J2K_FORMAT_ERROR;
+            }
+        }
+        info->params.quant_step_count = (uint16_t)(remaining / 2u);
+        return DIC_STATUS_OK;
+    }
+    return DIC_J2K_FORMAT_ERROR;
+}
+
 /* Reference: paper/T-REC-T.800-200208.pdf, A.4.2 Table A.5, SOT Psot counts bytes from SOT marker through tile-part data. */
 static dic_status j2k_parse_sot(FILE *file, uint16_t length, j2k_codestream_info *info)
 {
@@ -251,6 +309,8 @@ static dic_status j2k_read_codestream_info_stream(FILE *file, j2k_codestream_inf
             status = j2k_parse_cod(file, length, info);
         else if (marker == j2k_MARKER_RGN)
             status = j2k_parse_rgn(file, length, info);
+        else if (marker == j2k_MARKER_QCD)
+            status = j2k_parse_qcd(file, length, info);
         else if (marker == j2k_MARKER_SOT)
             status = j2k_parse_sot(file, length, info);
         else if (fseek(file, (long)length - 2L, SEEK_CUR) != 0)

@@ -17,8 +17,8 @@ static void finalproj_print_usage(void)
         "  finalproj encode <input.pgm|input.ppm> <q>\n"
         "  finalproj decode image.bit <q> <original.pgm|original.ppm>\n"
         "  finalproj codec <input.pgm|input.ppm> <q>\n"
-        "  finalproj j2k-encode <input.pgm|input.ppm> <output.j2k>\n"
-        "  finalproj jp2-encode <input.pgm|input.ppm> <output.jp2>\n"
+        "  finalproj j2k-encode <input.pgm|input.ppm> <output.j2k> [Q|-1]\n"
+        "  finalproj jp2-encode <input.pgm|input.ppm> <output.jp2> [Q|-1]\n"
         "  finalproj jp2-tile-encode <input.pgm|input.ppm> <output.jp2> <tile-size|auto> <layers>\n"
         "  finalproj j2k-decode <input.j2k> <output.pgm|output.ppm>\n"
         "  finalproj jp2-decode <input.jp2> <output.pgm|output.ppm>\n"
@@ -41,6 +41,24 @@ static int finalproj_parse_positive_int(const char *text, int *value)
 
     parsed = strtol(text, &end, 10);
     if (end == text || *end != '\0' || parsed <= 0 || parsed > 1000000L)
+        return 0;
+
+    *value = (int)parsed;
+    return 1;
+}
+
+static int finalproj_parse_j2k_quality(const char *text, int *value)
+{
+    char *end = NULL;
+    long parsed;
+
+    if (text == NULL || value == NULL)
+        return 0;
+
+    parsed = strtol(text, &end, 10);
+    if (end == text || *end != '\0')
+        return 0;
+    if (parsed != -1L && (parsed < 1L || parsed > 100L))
         return 0;
 
     *value = (int)parsed;
@@ -130,14 +148,18 @@ static int finalproj_run_basic_command(int argc, char **argv)
 static int finalproj_run_j2k_write_command(int argc, char **argv)
 {
     int ok;
+    int quality = -1;
 
     if (strcmp(argv[1], "j2k-stub") == 0 || strcmp(argv[1], "j2k-encode") == 0)
     {
-        if (argc != 4)
+        if ((strcmp(argv[1], "j2k-stub") == 0 && argc != 4)
+            || (strcmp(argv[1], "j2k-encode") == 0 && argc != 4 && argc != 5))
+            return 0;
+        if (argc == 5 && !finalproj_parse_j2k_quality(argv[4], &quality))
             return 0;
         ok = strcmp(argv[1], "j2k-stub") == 0
             ? imageWriteJ2KStub(argv[2], argv[3])
-            : imageWriteJ2K(argv[2], argv[3]);
+            : imageWriteJ2K(argv[2], argv[3], quality);
         if (!ok)
             return 0;
         printf("wrote %s\n", argv[3]);
@@ -146,11 +168,14 @@ static int finalproj_run_j2k_write_command(int argc, char **argv)
 
     if (strcmp(argv[1], "jp2-stub") == 0 || strcmp(argv[1], "jp2-encode") == 0)
     {
-        if (argc != 4)
+        if ((strcmp(argv[1], "jp2-stub") == 0 && argc != 4)
+            || (strcmp(argv[1], "jp2-encode") == 0 && argc != 4 && argc != 5))
+            return 0;
+        if (argc == 5 && !finalproj_parse_j2k_quality(argv[4], &quality))
             return 0;
         ok = strcmp(argv[1], "jp2-stub") == 0
             ? imageWriteJP2Stub(argv[2], argv[3])
-            : imageWriteJP2(argv[2], argv[3]);
+            : imageWriteJP2(argv[2], argv[3], quality);
         if (!ok)
             return 0;
         printf("wrote %s\n", argv[3]);

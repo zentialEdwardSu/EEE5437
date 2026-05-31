@@ -7,3 +7,4 @@ indexed/
 .idea
 *.html
 *.jp2
+.worktrees/

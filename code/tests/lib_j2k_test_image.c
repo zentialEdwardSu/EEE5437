@@ -178,10 +178,35 @@ static int dic_test_j2k_sod_payload_differs(
     return differs;
 }
 
+static unsigned int dic_test_max_abs_diff(const dic_image_u8 *left, const dic_image_u8 *right)
+{
+    size_t count;
+    size_t index;
+    unsigned int max_diff = 0u;
+
+    if (left->width != right->width || left->height != right->height || left->channels != right->channels)
+        return 256u;
+
+    count = dic_image_u8_sample_count(left->width, left->height, left->channels);
+    for (index = 0u; index < count; ++index)
+    {
+        unsigned int left_sample = left->data[index];
+        unsigned int right_sample = right->data[index];
+        unsigned int diff = left_sample > right_sample
+            ? left_sample - right_sample
+            : right_sample - left_sample;
+
+        if (diff > max_diff)
+            max_diff = diff;
+    }
+    return max_diff;
+}
+
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex G, Annex F, Annex D, and Annex B.10, image samples become packetized EBCOT tile-part payload. */
 int main(void)
 {
     const char *j2k_path = "dic_image_real_payload_test.j2k";
+    const char *lossy_j2k_path = "dic_image_lossy_payload_test.j2k";
     const char *roi_j2k_path = "dic_image_roi_payload_test.j2k";
     const char *tiled_j2k_path = "dic_image_tiled_payload_test.j2k";
     const char *jp2_path = "dic_image_real_payload_test.jp2";
@@ -193,8 +218,10 @@ int main(void)
     j2k_codestream_info roi_info;
     dic_rect_i32 roi_rect = { 2, 2, 3, 3 };
     uint8_t *roi_shift_map = NULL;
+    const int lossy_qualities[] = {1, 75, 100};
     int x;
     int y;
+    dic_status status;
     unsigned int resolution;
 
     dic_image_u8_init(&gray);
@@ -208,7 +235,7 @@ int main(void)
             gray.data[(size_t)y * (size_t)gray.width + (size_t)x] = (uint8_t)(x * 17 + y * 11);
     }
 
-    DIC_EXPECT(j2k_write_image_codestream(j2k_path, &gray, 5) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_image_codestream(j2k_path, &gray, 5, -1) == DIC_STATUS_OK);
     DIC_EXPECT(j2k_read_codestream_info(j2k_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == 8u);
     DIC_EXPECT(info.params.height == 8u);
@@ -230,6 +257,28 @@ int main(void)
     DIC_EXPECT(decoded.channels == gray.channels);
     DIC_EXPECT(memcmp(decoded.data, gray.data, dic_image_u8_sample_count(gray.width, gray.height, gray.channels)) == 0);
     dic_image_u8_free(&decoded);
+
+    for (x = 0; x < (int)(sizeof(lossy_qualities) / sizeof(lossy_qualities[0])); ++x)
+    {
+        DIC_EXPECT(j2k_write_image_codestream(lossy_j2k_path, &gray, 5, lossy_qualities[x]) == DIC_STATUS_OK);
+        DIC_EXPECT(j2k_read_codestream_info(lossy_j2k_path, &info) == DIC_STATUS_OK);
+        DIC_EXPECT(info.params.reversible == 0u);
+        DIC_EXPECT(info.params.quant_guard_bits == 7u);
+        DIC_EXPECT(info.params.quant_step_count == 1u + 3u * info.params.decomposition_levels);
+        DIC_EXPECT(info.params.quant_step_sizes[0] > 0.0);
+        status = j2k_read_image_codestream(lossy_j2k_path, &decoded);
+        if (status != DIC_STATUS_OK)
+            fprintf(stderr, "lossy decode status %d for Q=%d\n", (int)status, lossy_qualities[x]);
+        DIC_EXPECT(status == DIC_STATUS_OK);
+        DIC_EXPECT(decoded.width == gray.width);
+        DIC_EXPECT(decoded.height == gray.height);
+        DIC_EXPECT(decoded.channels == gray.channels);
+        if (lossy_qualities[x] == 100)
+            DIC_EXPECT(dic_test_max_abs_diff(&decoded, &gray) <= 3u);
+        dic_image_u8_free(&decoded);
+    }
+    DIC_EXPECT(j2k_write_image_codestream(lossy_j2k_path, &gray, 5, 0) == DIC_STATUS_INVALID_ARGUMENT);
+    remove(lossy_j2k_path);
 
     DIC_EXPECT(j2k_roi_build_shift_map(gray.width, gray.height, 3, &roi_rect, &roi_shift_map) == DIC_STATUS_OK);
     DIC_EXPECT(roi_shift_map != NULL);
@@ -284,7 +333,7 @@ int main(void)
         }
     }
 
-    DIC_EXPECT(j2k_write_image_jp2(jp2_path, &rgb, 5) == DIC_STATUS_OK);
+    DIC_EXPECT(j2k_write_image_jp2(jp2_path, &rgb, 5, -1) == DIC_STATUS_OK);
     DIC_EXPECT(jp2_read_codestream_info(jp2_path, &info) == DIC_STATUS_OK);
     DIC_EXPECT(info.params.width == 7u);
     DIC_EXPECT(info.params.height == 5u);
@@ -300,6 +349,19 @@ int main(void)
     DIC_EXPECT(decoded.height == rgb.height);
     DIC_EXPECT(decoded.channels == rgb.channels);
     DIC_EXPECT(memcmp(decoded.data, rgb.data, dic_image_u8_sample_count(rgb.width, rgb.height, rgb.channels)) == 0);
+    dic_image_u8_free(&decoded);
+    remove(jp2_path);
+
+    DIC_EXPECT(j2k_write_image_jp2(jp2_path, &rgb, 5, 100) == DIC_STATUS_OK);
+    DIC_EXPECT(jp2_read_codestream_info(jp2_path, &info) == DIC_STATUS_OK);
+    DIC_EXPECT(info.params.reversible == 0u);
+    DIC_EXPECT(info.params.quant_guard_bits == 7u);
+    DIC_EXPECT(info.params.multiple_component_transform == 1u);
+    DIC_EXPECT(j2k_read_image_jp2(jp2_path, &decoded) == DIC_STATUS_OK);
+    DIC_EXPECT(decoded.width == rgb.width);
+    DIC_EXPECT(decoded.height == rgb.height);
+    DIC_EXPECT(decoded.channels == rgb.channels);
+    DIC_EXPECT(dic_test_max_abs_diff(&decoded, &rgb) <= 4u);
     dic_image_u8_free(&decoded);
     remove(jp2_path);
 

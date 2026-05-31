@@ -18,6 +18,7 @@
 #include "j2k/j2k_debug.h"
 
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,9 +27,12 @@
 #include "codec/dic_subband.h"
 #include "j2k/j2k_codestream.h"
 #include "j2k/j2k_ebcot.h"
+#include "j2k/j2k_ict.h"
+#include "j2k/j2k_quant.h"
 #include "j2k/j2k_rct.h"
 #include "j2k/jp2_file.h"
 #include "wavelet/dic_dwt53.h"
+#include "wavelet/dic_dwt97.h"
 
 enum
 {
@@ -353,7 +357,7 @@ static dic_status j2k_decode_parse_cod(
     params->use_sop = (uint8_t)((scod & 0x02u) != 0u);
     params->use_eph = (uint8_t)((scod & 0x04u) != 0u);
     params->reversible = transform == 1u ? 1u : 0u;
-    if (progression != 0u || params->layers == 0u || !params->reversible)
+    if (progression != 0u || params->layers == 0u)
         return DIC_J2K_FORMAT_ERROR;
     if (codeblock_width != 4u || codeblock_height != 4u || codeblock_style != 0x04u)
         return DIC_J2K_FORMAT_ERROR;
@@ -375,6 +379,66 @@ static dic_status j2k_decode_parse_cod(
             return DIC_J2K_UNSUPPORTED_PRECINCT_SIZE;
     }
     return DIC_STATUS_OK;
+}
+
+static unsigned int j2k_decode_irreversible_qcd_range_bits(unsigned int step_index)
+{
+    if (step_index == 0u)
+        return 8u;
+    return ((step_index - 1u) % 3u) == 2u ? 10u : 9u;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, A.6.4, QCD supplies quantization step sizes needed by irreversible decoding. */
+static dic_status j2k_decode_parse_qcd(
+    j2k_decode_view *view,
+    uint16_t length,
+    j2k_basic_params *params
+)
+{
+    uint8_t sqcd;
+    uint16_t remaining;
+
+    if (length < 3u || params == NULL)
+        return DIC_J2K_FORMAT_ERROR;
+    if (!j2k_decode_read_u8(view, &sqcd))
+        return DIC_STATUS_FILE_READ_ERROR;
+
+    remaining = (uint16_t)(length - 3u);
+    params->quant_step_count = 0u;
+    params->quant_guard_bits = (uint8_t)(sqcd >> 5);
+    if ((sqcd & 0x1fu) == 0u)
+    {
+        if (remaining > j2k_MAX_QUANT_STEPS || remaining > view->size - view->offset)
+            return DIC_J2K_FORMAT_ERROR;
+        view->offset += remaining;
+        params->quant_step_count = remaining;
+        return DIC_STATUS_OK;
+    }
+    if ((sqcd & 0x1fu) == 2u)
+    {
+        uint16_t index;
+
+        if ((remaining % 2u) != 0u || remaining / 2u > j2k_MAX_QUANT_STEPS)
+            return DIC_J2K_FORMAT_ERROR;
+        for (index = 0u; index < remaining / 2u; ++index)
+        {
+            uint16_t spqcd;
+
+            if (!j2k_decode_read_u16_be(view, &spqcd))
+                return DIC_STATUS_FILE_READ_ERROR;
+            if (j2k_quant_decode_irreversible_spqcd(
+                    spqcd,
+                    j2k_decode_irreversible_qcd_range_bits(index),
+                    params->quant_step_sizes + index
+                ) != DIC_STATUS_OK)
+            {
+                return DIC_J2K_FORMAT_ERROR;
+            }
+        }
+        params->quant_step_count = (uint16_t)(remaining / 2u);
+        return DIC_STATUS_OK;
+    }
+    return DIC_J2K_FORMAT_ERROR;
 }
 
 static dic_status j2k_decode_parse_codestream(
@@ -405,7 +469,14 @@ static dic_status j2k_decode_parse_codestream(
         if (!j2k_decode_read_u16_be(&view, &marker))
             return DIC_J2K_FORMAT_ERROR;
         if (marker == j2k_MARKER_EOC)
+        {
+            if (!params->reversible
+                && params->quant_step_count != (uint16_t)(1u + 3u * (unsigned int)params->decomposition_levels))
+            {
+                return DIC_J2K_FORMAT_ERROR;
+            }
             return DIC_STATUS_OK;
+        }
         if (marker == j2k_MARKER_SOT)
         {
             uint16_t tile_index;
@@ -452,6 +523,8 @@ static dic_status j2k_decode_parse_codestream(
             status = j2k_decode_parse_siz(&view, length, params);
         else if (marker == j2k_MARKER_COD)
             status = j2k_decode_parse_cod(&view, length, params);
+        else if (marker == j2k_MARKER_QCD)
+            status = j2k_decode_parse_qcd(&view, length, params);
         else
             view.offset += (size_t)length - 2u;
         if (status != DIC_STATUS_OK)
@@ -1207,6 +1280,63 @@ static dic_status j2k_decode_make_subbands(
     return DIC_STATUS_OK;
 }
 
+static uint32_t j2k_decode_lossy_nominal_bitplanes(
+    double step_size,
+    unsigned int step_index,
+    uint8_t guard_bits
+)
+{
+    uint16_t spqcd;
+    uint32_t exponent;
+
+    if (j2k_quant_encode_irreversible_spqcd(
+            step_size,
+            j2k_decode_irreversible_qcd_range_bits(step_index),
+            &spqcd
+        ) != DIC_STATUS_OK)
+    {
+        return 1u;
+    }
+    exponent = (uint32_t)(spqcd >> 11);
+    return guard_bits > 0u ? exponent + (uint32_t)guard_bits - 1u : exponent;
+}
+
+static dic_status j2k_decode_set_lossy_nominal_bitplanes(
+    j2k_decode_subband *subbands,
+    size_t subband_count,
+    const j2k_basic_params *params
+)
+{
+    size_t per_component;
+    uint16_t expected_steps;
+    uint16_t component;
+
+    if (subbands == NULL || params == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    per_component = 1u + (size_t)params->decomposition_levels * 3u;
+    expected_steps = (uint16_t)per_component;
+    if (params->quant_step_count != expected_steps)
+        return DIC_J2K_FORMAT_ERROR;
+    if (subband_count != per_component * (size_t)params->components)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    for (component = 0u; component < params->components; ++component)
+    {
+        size_t step;
+
+        for (step = 0u; step < per_component; ++step)
+        {
+            subbands[(size_t)component * per_component + step].nominal_bitplanes =
+                j2k_decode_lossy_nominal_bitplanes(
+                    params->quant_step_sizes[step],
+                    (unsigned int)step,
+                    params->quant_guard_bits
+                );
+        }
+    }
+    return DIC_STATUS_OK;
+}
+
 static j2k_decode_subband *j2k_decode_packet_subbands(
     j2k_decode_subband *subbands,
     size_t subband_count,
@@ -1307,6 +1437,113 @@ static uint8_t j2k_decode_unshift_u8(int32_t value)
     return (uint8_t)shifted;
 }
 
+static uint8_t j2k_decode_unshift_double_u8(double value)
+{
+    long rounded = lround(value + 128.0);
+
+    if (rounded < 0L)
+        return 0u;
+    if (rounded > 255L)
+        return 255u;
+    return (uint8_t)rounded;
+}
+
+static dic_status j2k_decode_dequantize_rect(
+    const int32_t *source,
+    double *target,
+    int plane_width,
+    const dic_rect_i32 *rect,
+    double step_size
+)
+{
+    int y;
+
+    if (source == NULL || target == NULL || rect == NULL || rect->width <= 0 || rect->height <= 0)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    for (y = 0; y < rect->height; ++y)
+    {
+        int x;
+
+        for (x = 0; x < rect->width; ++x)
+        {
+            size_t offset = (size_t)(rect->y + y) * (size_t)plane_width + (size_t)(rect->x + x);
+            dic_status status = j2k_dequantize_coefficient(source[offset], step_size, target + offset);
+
+            if (status != DIC_STATUS_OK)
+                return status;
+        }
+    }
+    return DIC_STATUS_OK;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex E, inverse quantization reconstructs irreversible DWT coefficients before IDWT. */
+static dic_status j2k_decode_dequantize_planes(
+    const int32_t *source,
+    double *target,
+    int width,
+    int height,
+    int components,
+    int levels,
+    const double *steps,
+    uint16_t step_count
+)
+{
+    size_t plane_samples = (size_t)width * (size_t)height;
+    int component;
+
+    if (step_count != (uint16_t)(1u + 3u * (unsigned int)levels))
+        return DIC_J2K_FORMAT_ERROR;
+
+    for (component = 0; component < components; ++component)
+    {
+        const int32_t *source_plane = source + (size_t)component * plane_samples;
+        double *target_plane = target + (size_t)component * plane_samples;
+        int resolution;
+        dic_rect_i32 rect;
+        dic_status status;
+
+        status = levels == 0 ? DIC_STATUS_OK : dic_subband_lowest_ll_rect(width, height, levels, &rect);
+        if (levels == 0)
+        {
+            rect.x = 0;
+            rect.y = 0;
+            rect.width = width;
+            rect.height = height;
+        }
+        if (status == DIC_STATUS_OK)
+            status = j2k_decode_dequantize_rect(source_plane, target_plane, width, &rect, steps[0]);
+        for (resolution = 1; status == DIC_STATUS_OK && resolution <= levels; ++resolution)
+        {
+            static const dic_subband_orientation orientations[] = {
+                DIC_SUBBAND_HL,
+                DIC_SUBBAND_LH,
+                DIC_SUBBAND_HH
+            };
+            int index;
+            int level = levels - resolution + 1;
+
+            for (index = 0; status == DIC_STATUS_OK && index < 3; ++index)
+            {
+                status = dic_subband_rect(width, height, levels, level, orientations[index], &rect);
+                if (status == DIC_STATUS_OK)
+                {
+                    status = j2k_decode_dequantize_rect(
+                        source_plane,
+                        target_plane,
+                        width,
+                        &rect,
+                        steps[1 + (resolution - 1) * 3 + index]
+                    );
+                }
+            }
+        }
+        if (status != DIC_STATUS_OK)
+            return status;
+    }
+    return DIC_STATUS_OK;
+}
+
 static dic_status j2k_decode_tile_payload(
     const uint8_t *payload,
     size_t payload_size,
@@ -1321,6 +1558,7 @@ static dic_status j2k_decode_tile_payload(
     j2k_decode_subband *subbands = NULL;
     size_t subband_count = 0u;
     int32_t *planes = NULL;
+    double *double_planes = NULL;
     size_t plane_samples;
     size_t offset = 0u;
     uint16_t packet_sequence = 0u;
@@ -1348,6 +1586,8 @@ static dic_status j2k_decode_tile_payload(
         &subbands,
         &subband_count
     );
+    if (status == DIC_STATUS_OK && !params->reversible)
+        status = j2k_decode_set_lossy_nominal_bitplanes(subbands, subband_count, params);
     for (layer = 0u; status == DIC_STATUS_OK && layer < layers_to_decode; ++layer)
     {
         int resolution;
@@ -1396,18 +1636,53 @@ static dic_status j2k_decode_tile_payload(
             tile_height,
             (int)params->components
         );
-    for (component = 0; status == DIC_STATUS_OK && component < (int)params->components; ++component)
+    if (status == DIC_STATUS_OK && params->reversible)
     {
-        status = dic_dwt53_inverse_plane(
-            planes + (size_t)component * plane_samples,
-            tile_width,
-            tile_height,
-            (int)params->decomposition_levels
-        );
+        for (component = 0; status == DIC_STATUS_OK
+             && params->decomposition_levels > 0u
+             && component < (int)params->components; ++component)
+        {
+            status = dic_dwt53_inverse_plane(
+                planes + (size_t)component * plane_samples,
+                tile_width,
+                tile_height,
+                (int)params->decomposition_levels
+            );
+        }
+    }
+    else if (status == DIC_STATUS_OK)
+    {
+        double_planes = (double *)calloc(plane_samples * (size_t)params->components, sizeof(double_planes[0]));
+        if (double_planes == NULL)
+            status = DIC_STATUS_MEMORY_ERROR;
+        if (status == DIC_STATUS_OK)
+        {
+            status = j2k_decode_dequantize_planes(
+                planes,
+                double_planes,
+                tile_width,
+                tile_height,
+                (int)params->components,
+                (int)params->decomposition_levels,
+                params->quant_step_sizes,
+                params->quant_step_count
+            );
+        }
+        for (component = 0; status == DIC_STATUS_OK
+             && params->decomposition_levels > 0u
+             && component < (int)params->components; ++component)
+        {
+            status = dic_dwt97_inverse_plane(
+                double_planes + (size_t)component * plane_samples,
+                tile_width,
+                tile_height,
+                (int)params->decomposition_levels
+            );
+        }
     }
     if (status == DIC_STATUS_OK)
         status = dic_image_u8_alloc(tile, tile_width, tile_height, (int)params->components);
-    if (status == DIC_STATUS_OK && params->components == 3u && params->multiple_component_transform)
+    if (status == DIC_STATUS_OK && params->reversible && params->components == 3u && params->multiple_component_transform)
     {
         int32_t *interleaved = (int32_t *)malloc(plane_samples * 3u * sizeof(interleaved[0]));
         size_t pixel;
@@ -1435,6 +1710,41 @@ static dic_status j2k_decode_tile_payload(
             free(interleaved);
         }
     }
+    else if (status == DIC_STATUS_OK && !params->reversible && params->components == 3u && params->multiple_component_transform)
+    {
+        double *interleaved = (double *)malloc(plane_samples * 3u * sizeof(interleaved[0]));
+        size_t pixel;
+
+        if (interleaved == NULL)
+            status = DIC_STATUS_MEMORY_ERROR;
+        else
+        {
+            for (pixel = 0u; pixel < plane_samples; ++pixel)
+            {
+                interleaved[pixel * 3u + 0u] = double_planes[pixel];
+                interleaved[pixel * 3u + 1u] = double_planes[plane_samples + pixel];
+                interleaved[pixel * 3u + 2u] = double_planes[plane_samples * 2u + pixel];
+            }
+            status = j2k_ict_inverse(interleaved, plane_samples);
+            if (status == DIC_STATUS_OK)
+            {
+                for (pixel = 0u; pixel < plane_samples; ++pixel)
+                {
+                    tile->data[pixel * 3u + 0u] = j2k_decode_unshift_double_u8(interleaved[pixel * 3u + 0u]);
+                    tile->data[pixel * 3u + 1u] = j2k_decode_unshift_double_u8(interleaved[pixel * 3u + 1u]);
+                    tile->data[pixel * 3u + 2u] = j2k_decode_unshift_double_u8(interleaved[pixel * 3u + 2u]);
+                }
+            }
+            free(interleaved);
+        }
+    }
+    else if (status == DIC_STATUS_OK && !params->reversible)
+    {
+        size_t sample;
+
+        for (sample = 0u; sample < plane_samples * (size_t)params->components; ++sample)
+            tile->data[sample] = j2k_decode_unshift_double_u8(double_planes[sample]);
+    }
     else if (status == DIC_STATUS_OK)
     {
         size_t sample;
@@ -1443,6 +1753,7 @@ static dic_status j2k_decode_tile_payload(
             tile->data[sample] = j2k_decode_unshift_u8(planes[sample]);
     }
 
+    free(double_planes);
     free(planes);
     j2k_decode_subbands_free(subbands, subband_count);
     return status;

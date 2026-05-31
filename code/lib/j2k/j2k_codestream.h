@@ -28,7 +28,8 @@ enum j2k_marker
 
 enum
 {
-    j2k_MAX_DECOMPOSITION_LEVELS = 32
+    j2k_MAX_DECOMPOSITION_LEVELS = 32,
+    j2k_MAX_QUANT_STEPS = 1 + 3 * j2k_MAX_DECOMPOSITION_LEVELS
 };
 
 typedef struct j2k_basic_params
@@ -48,6 +49,9 @@ typedef struct j2k_basic_params
     uint8_t use_precincts; /**< Non-zero sets COD Scod bit 0 and writes explicit maximum precinct bytes. */
     uint8_t precinct_width_exponents[j2k_MAX_DECOMPOSITION_LEVELS + 1]; /**< PPx per resolution; writer currently accepts only 15. */
     uint8_t precinct_height_exponents[j2k_MAX_DECOMPOSITION_LEVELS + 1]; /**< PPy per resolution; writer currently accepts only 15. */
+    uint8_t quant_guard_bits; /**< QCD guard-bit count used to derive packet-header nominal bit-plane counts. */
+    uint16_t quant_step_count; /**< Number of default quantization step sizes parsed from or written to QCD. */
+    double quant_step_sizes[j2k_MAX_QUANT_STEPS]; /**< Irreversible scalar expounded QCD step sizes in subband order. */
 } j2k_basic_params;
 
 typedef struct j2k_tile_part_payload

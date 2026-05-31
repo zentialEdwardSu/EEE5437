@@ -23,15 +23,19 @@
 
 #include "codec/dic_subband.h"
 #include "j2k/j2k_codestream.h"
+#include "j2k/j2k_ict.h"
 #include "j2k/j2k_packet.h"
+#include "j2k/j2k_quant.h"
 #include "j2k/j2k_rct.h"
 #include "j2k/j2k_roi.h"
 #include "j2k/jp2_file.h"
 #include "wavelet/dic_dwt53.h"
+#include "wavelet/dic_dwt97.h"
 
 enum
 {
-    j2k_IMAGE_CODEBLOCK_SIZE = 64
+    j2k_IMAGE_CODEBLOCK_SIZE = 64,
+    j2k_IMAGE_LOSSY_GUARD_BITS = 7
 };
 
 typedef struct j2k_image_payload
@@ -324,6 +328,71 @@ static dic_status j2k_image_make_planes(
     return DIC_STATUS_OK;
 }
 
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex G.1-G.2, irreversible coding uses the ICT after unsigned sample level shifting. */
+static dic_status j2k_image_make_double_planes(
+    const dic_image_u8 *image,
+    double **planes_out
+)
+{
+    size_t pixel_count;
+    double *planes;
+    size_t pixel;
+    int component;
+
+    if (image == NULL || planes_out == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (image->width <= 0 || image->height <= 0 || (image->channels != 1 && image->channels != 3))
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    pixel_count = (size_t)image->width * (size_t)image->height;
+    if (pixel_count > (size_t)-1 / (size_t)image->channels / sizeof(planes[0]))
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    planes = (double *)malloc(pixel_count * (size_t)image->channels * sizeof(planes[0]));
+    if (planes == NULL)
+        return DIC_STATUS_MEMORY_ERROR;
+
+    if (image->channels == 1)
+    {
+        for (pixel = 0u; pixel < pixel_count; ++pixel)
+            planes[pixel] = (double)j2k_image_level_shift(image->data[pixel]);
+    }
+    else
+    {
+        double *interleaved = (double *)malloc(pixel_count * 3u * sizeof(interleaved[0]));
+        dic_status status;
+
+        if (interleaved == NULL)
+        {
+            free(planes);
+            return DIC_STATUS_MEMORY_ERROR;
+        }
+        for (pixel = 0u; pixel < pixel_count; ++pixel)
+        {
+            for (component = 0; component < 3; ++component)
+                interleaved[pixel * 3u + (size_t)component] =
+                    (double)j2k_image_level_shift(image->data[pixel * 3u + (size_t)component]);
+        }
+        status = j2k_ict_forward(interleaved, pixel_count);
+        if (status != DIC_STATUS_OK)
+        {
+            free(interleaved);
+            free(planes);
+            return status;
+        }
+        for (pixel = 0u; pixel < pixel_count; ++pixel)
+        {
+            for (component = 0; component < 3; ++component)
+                planes[(size_t)component * pixel_count + pixel] =
+                    interleaved[pixel * 3u + (size_t)component];
+        }
+        free(interleaved);
+    }
+
+    *planes_out = planes;
+    return DIC_STATUS_OK;
+}
+
 static j2k_subband_orientation j2k_image_orientation(dic_subband_orientation orientation)
 {
     j2k_DEBUG_ENTER();
@@ -433,6 +502,7 @@ static dic_status j2k_image_append_resolution_packet(
     int resolution,
     uint32_t component_extra_bits,
     uint32_t roi_extra_bits,
+    const uint32_t *nominal_bitplanes,
     uint16_t layer_index,
     uint16_t layers,
     uint16_t packet_sequence,
@@ -477,7 +547,7 @@ static dic_status j2k_image_append_resolution_packet(
                 width,
                 &rect,
                 j2k_SUBBAND_LL_LH,
-                9u + component_extra_bits + roi_extra_bits,
+                nominal_bitplanes == NULL ? 9u + component_extra_bits + roi_extra_bits : nominal_bitplanes[0],
                 subband_streams
             );
             if (status == DIC_STATUS_OK)
@@ -512,7 +582,9 @@ static dic_status j2k_image_append_resolution_packet(
                 width,
                 &rect,
                 j2k_image_orientation(orientations[index]),
-                (orientations[index] == DIC_SUBBAND_HH ? 11u : 10u) + component_extra_bits + roi_extra_bits,
+                nominal_bitplanes == NULL
+                    ? (orientations[index] == DIC_SUBBAND_HH ? 11u : 10u) + component_extra_bits + roi_extra_bits
+                    : nominal_bitplanes[1 + (resolution - 1) * 3 + (int)index],
                 subband_streams + index
             );
             if (status != DIC_STATUS_OK)
@@ -554,6 +626,7 @@ static dic_status j2k_image_build_payload(
     int levels,
     uint16_t layers,
     uint8_t roi_shift,
+    const uint32_t *nominal_bitplanes,
     j2k_image_payload *payload
 )
 {
@@ -585,6 +658,7 @@ static dic_status j2k_image_build_payload(
                     resolution,
                     component_extra_bits,
                     roi_shift,
+                    nominal_bitplanes,
                     layer,
                     layers,
                     packet_sequence,
@@ -596,6 +670,236 @@ static dic_status j2k_image_build_payload(
         }
     }
 
+    return status;
+}
+
+static dic_status j2k_image_quantize_rect(
+    const double *source,
+    int32_t *target,
+    int plane_width,
+    const dic_rect_i32 *rect,
+    double step_size
+)
+{
+    int y;
+
+    if (source == NULL || target == NULL || rect == NULL || rect->width <= 0 || rect->height <= 0)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    for (y = 0; y < rect->height; ++y)
+    {
+        int x;
+
+        for (x = 0; x < rect->width; ++x)
+        {
+            size_t offset = (size_t)(rect->y + y) * (size_t)plane_width + (size_t)(rect->x + x);
+            dic_status status = j2k_quantize_coefficient(source[offset], step_size, target + offset);
+
+            if (status != DIC_STATUS_OK)
+                return status;
+        }
+    }
+    return DIC_STATUS_OK;
+}
+
+/* Reference: paper/T-REC-T.800-200208.pdf, Annex E, irreversible coefficient quantization is sub-band scalar quantization before EBCOT. */
+static dic_status j2k_image_quantize_planes(
+    const double *source,
+    int32_t *target,
+    int width,
+    int height,
+    int channels,
+    int levels,
+    const double *steps
+)
+{
+    size_t plane_samples = (size_t)width * (size_t)height;
+    int component;
+
+    for (component = 0; component < channels; ++component)
+    {
+        const double *source_plane = source + (size_t)component * plane_samples;
+        int32_t *target_plane = target + (size_t)component * plane_samples;
+        int resolution;
+        dic_rect_i32 rect;
+        dic_status status;
+
+        status = levels == 0
+            ? DIC_STATUS_OK
+            : dic_subband_lowest_ll_rect(width, height, levels, &rect);
+        if (levels == 0)
+        {
+            rect.x = 0;
+            rect.y = 0;
+            rect.width = width;
+            rect.height = height;
+        }
+        if (status == DIC_STATUS_OK)
+            status = j2k_image_quantize_rect(source_plane, target_plane, width, &rect, steps[0]);
+        for (resolution = 1; status == DIC_STATUS_OK && resolution <= levels; ++resolution)
+        {
+            static const dic_subband_orientation orientations[] = {
+                DIC_SUBBAND_HL,
+                DIC_SUBBAND_LH,
+                DIC_SUBBAND_HH
+            };
+            int index;
+            int level = levels - resolution + 1;
+
+            for (index = 0; status == DIC_STATUS_OK && index < 3; ++index)
+            {
+                status = dic_subband_rect(width, height, levels, level, orientations[index], &rect);
+                if (status == DIC_STATUS_OK)
+                {
+                    status = j2k_image_quantize_rect(
+                        source_plane,
+                        target_plane,
+                        width,
+                        &rect,
+                        steps[1 + (resolution - 1) * 3 + index]
+                    );
+                }
+            }
+        }
+        if (status != DIC_STATUS_OK)
+            return status;
+    }
+    return DIC_STATUS_OK;
+}
+
+static unsigned int j2k_image_irreversible_qcd_range_bits(unsigned int step_index)
+{
+    if (step_index == 0u)
+        return 8u;
+    return ((step_index - 1u) % 3u) == 2u ? 10u : 9u;
+}
+
+static uint32_t j2k_image_lossy_nominal_bitplanes(
+    double step_size,
+    unsigned int step_index,
+    uint8_t guard_bits
+)
+{
+    uint16_t spqcd;
+    uint32_t exponent;
+
+    if (j2k_quant_encode_irreversible_spqcd(
+            step_size,
+            j2k_image_irreversible_qcd_range_bits(step_index),
+            &spqcd
+        ) != DIC_STATUS_OK)
+    {
+        return 1u;
+    }
+
+    exponent = (uint32_t)(spqcd >> 11);
+    return guard_bits > 0u ? exponent + (uint32_t)guard_bits - 1u : exponent;
+}
+
+static dic_status j2k_image_encode_lossy_payload(
+    const dic_image_u8 *image,
+    int requested_levels,
+    uint16_t layers,
+    int quality,
+    j2k_basic_params *params,
+    j2k_image_payload *payload
+)
+{
+    double *double_planes = NULL;
+    int32_t *quantized_planes = NULL;
+    double base_step;
+    dic_status status;
+    int levels;
+    int component;
+    size_t plane_samples;
+    unsigned int step;
+    unsigned int step_count;
+    uint32_t nominal_bitplanes[j2k_MAX_QUANT_STEPS];
+
+    if (image == NULL || params == NULL || payload == NULL || requested_levels < 0 || layers == 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (image->width <= 0 || image->height <= 0 || (image->channels != 1 && image->channels != 3))
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    status = j2k_quant_base_step_from_quality(quality, &base_step);
+    if (status != DIC_STATUS_OK)
+        return status;
+
+    levels = j2k_image_effective_levels(image->width, image->height, requested_levels);
+    step_count = 1u + 3u * (unsigned int)levels;
+    status = j2k_image_make_double_planes(image, &double_planes);
+    if (status != DIC_STATUS_OK)
+        return status;
+    plane_samples = (size_t)image->width * (size_t)image->height;
+    for (component = 0; status == DIC_STATUS_OK && component < image->channels; ++component)
+    {
+        if (levels > 0)
+        {
+            status = dic_dwt97_forward_plane(
+                double_planes + (size_t)component * plane_samples,
+                image->width,
+                image->height,
+                levels
+            );
+        }
+    }
+    if (status == DIC_STATUS_OK)
+    {
+        quantized_planes = (int32_t *)calloc(plane_samples * (size_t)image->channels, sizeof(quantized_planes[0]));
+        if (quantized_planes == NULL)
+            status = DIC_STATUS_MEMORY_ERROR;
+    }
+    for (step = 0u; status == DIC_STATUS_OK && step < step_count; ++step)
+    {
+        params->quant_step_sizes[step] = base_step;
+        nominal_bitplanes[step] = j2k_image_lossy_nominal_bitplanes(
+            base_step,
+            step,
+            (uint8_t)j2k_IMAGE_LOSSY_GUARD_BITS
+        );
+    }
+    if (status == DIC_STATUS_OK)
+    {
+        status = j2k_image_quantize_planes(
+            double_planes,
+            quantized_planes,
+            image->width,
+            image->height,
+            image->channels,
+            levels,
+            params->quant_step_sizes
+        );
+    }
+    if (status == DIC_STATUS_OK)
+        status = j2k_image_build_payload(
+            quantized_planes,
+            image->width,
+            image->height,
+            image->channels,
+            levels,
+            layers,
+            0u,
+            nominal_bitplanes,
+            payload
+        );
+    if (status == DIC_STATUS_OK)
+    {
+        params->width = (uint32_t)image->width;
+        params->height = (uint32_t)image->height;
+        params->components = (uint16_t)image->channels;
+        params->decomposition_levels = (uint8_t)levels;
+        params->reversible = 0u;
+        params->multiple_component_transform = image->channels == 3 ? 1u : 0u;
+        params->layers = layers;
+        params->quant_guard_bits = (uint8_t)j2k_IMAGE_LOSSY_GUARD_BITS;
+        params->quant_step_count = (uint16_t)step_count;
+        params->use_sop = 1u;
+        params->use_eph = 1u;
+        j2k_image_set_max_precincts(params);
+    }
+
+    free(quantized_planes);
+    free(double_planes);
     return status;
 }
 
@@ -667,6 +971,7 @@ static dic_status j2k_image_encode_payload(
     uint16_t layers,
     const dic_rect_i32 *roi_rect,
     uint8_t roi_shift,
+    int quality,
     j2k_basic_params *params,
     j2k_image_payload *payload
 )
@@ -681,6 +986,12 @@ static dic_status j2k_image_encode_payload(
 
     if (image == NULL || params == NULL || payload == NULL || requested_levels < 0 || layers == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
+    if (quality != -1)
+    {
+        if (roi_shift > 0u || roi_rect != NULL)
+            return DIC_STATUS_INVALID_ARGUMENT;
+        return j2k_image_encode_lossy_payload(image, requested_levels, layers, quality, params, payload);
+    }
     if (roi_shift > 0u && roi_rect == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (image->width <= 0 || image->height <= 0 || (image->channels != 1 && image->channels != 3))
@@ -733,6 +1044,7 @@ static dic_status j2k_image_encode_payload(
             levels,
             layers,
             roi_shift,
+            NULL,
             payload
         );
 
@@ -862,6 +1174,7 @@ static dic_status j2k_image_encode_tile_parts(
                     layers,
                     NULL,
                     0u,
+                    -1,
                     &tile_params,
                     tile_payloads->payloads + tile_index
                 );
@@ -888,7 +1201,8 @@ static dic_status j2k_image_encode_tile_parts(
 dic_status j2k_write_image_codestream(
     const char *path,
     const dic_image_u8 *image,
-    int requested_levels
+    int requested_levels,
+    int quality
 )
 {
     j2k_DEBUG_ENTER();
@@ -900,7 +1214,7 @@ dic_status j2k_write_image_codestream(
     if (path == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = j2k_image_encode_payload(image, requested_levels, 1u, NULL, 0u, &params, &payload);
+    status = j2k_image_encode_payload(image, requested_levels, 1u, NULL, 0u, quality, &params, &payload);
     if (status == DIC_STATUS_OK)
         status = j2k_write_codestream_with_payload(path, &params, payload.data, payload.size);
 
@@ -926,7 +1240,7 @@ dic_status j2k_write_image_codestream_roi(
     if (path == NULL || roi_rect == NULL || roi_shift == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = j2k_image_encode_payload(image, requested_levels, 1u, roi_rect, roi_shift, &params, &payload);
+    status = j2k_image_encode_payload(image, requested_levels, 1u, roi_rect, roi_shift, -1, &params, &payload);
     if (status == DIC_STATUS_OK)
         status = j2k_write_codestream_with_payload(path, &params, payload.data, payload.size);
 
@@ -980,7 +1294,8 @@ dic_status j2k_write_image_codestream_tiled(
 dic_status j2k_write_image_jp2(
     const char *path,
     const dic_image_u8 *image,
-    int requested_levels
+    int requested_levels,
+    int quality
 )
 {
     j2k_DEBUG_ENTER();
@@ -992,7 +1307,7 @@ dic_status j2k_write_image_jp2(
     if (path == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = j2k_image_encode_payload(image, requested_levels, 1u, NULL, 0u, &params, &payload);
+    status = j2k_image_encode_payload(image, requested_levels, 1u, NULL, 0u, quality, &params, &payload);
     if (status == DIC_STATUS_OK)
         status = jp2_write_file_with_codestream_payload(path, &params, payload.data, payload.size);
 
@@ -1018,7 +1333,7 @@ dic_status j2k_write_image_jp2_roi(
     if (path == NULL || roi_rect == NULL || roi_shift == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = j2k_image_encode_payload(image, requested_levels, 1u, roi_rect, roi_shift, &params, &payload);
+    status = j2k_image_encode_payload(image, requested_levels, 1u, roi_rect, roi_shift, -1, &params, &payload);
     if (status == DIC_STATUS_OK)
         status = jp2_write_file_with_codestream_payload(path, &params, payload.data, payload.size);
 

@@ -25,10 +25,11 @@ int imageWriteJ2KStub(
     const char *outputFileName
 );
 
-/** Writes a full raw J2K codestream for the supported reversible JPEG 2000 subset. */
+/** Writes a raw J2K codestream; quality -1 is reversible, 1..100 is irreversible 9/7. */
 int imageWriteJ2K(
     const char *orgImageFileName,
-    const char *outputFileName
+    const char *outputFileName,
+    int quality
 );
 
 /** Writes a minimal JP2 wrapper for metadata and parser demos. */
@@ -37,10 +38,11 @@ int imageWriteJP2Stub(
     const char *outputFileName
 );
 
-/** Writes a JP2 file for the supported reversible JPEG 2000 subset. */
+/** Writes a JP2 file; quality -1 is reversible, 1..100 is irreversible 9/7. */
 int imageWriteJP2(
     const char *orgImageFileName,
-    const char *outputFileName
+    const char *outputFileName,
+    int quality
 );
 
 /** Writes a tiled JP2 file with the requested JPEG 2000 quality layer count. */

@@ -161,7 +161,8 @@ int imageWriteJ2KStub(
 
 int imageWriteJ2K(
     const char *orgImageFileName,
-    const char *outputFileName
+    const char *outputFileName,
+    int quality
 )
 {
     dic_image_u8 image = {0};
@@ -174,7 +175,7 @@ int imageWriteJ2K(
     if (status != DIC_STATUS_OK)
         return 0;
 
-    status = j2k_write_image_codestream(outputFileName, &image, FINALPROJ_LEVELS);
+    status = j2k_write_image_codestream(outputFileName, &image, FINALPROJ_LEVELS, quality);
     dic_image_u8_free(&image);
     return status == DIC_STATUS_OK;
 }
@@ -209,7 +210,8 @@ int imageWriteJP2Stub(
 
 int imageWriteJP2(
     const char *orgImageFileName,
-    const char *outputFileName
+    const char *outputFileName,
+    int quality
 )
 {
     dic_image_u8 image = {0};
@@ -222,7 +224,7 @@ int imageWriteJP2(
     if (status != DIC_STATUS_OK)
         return 0;
 
-    status = j2k_write_image_jp2(outputFileName, &image, FINALPROJ_LEVELS);
+    status = j2k_write_image_jp2(outputFileName, &image, FINALPROJ_LEVELS, quality);
     dic_image_u8_free(&image);
     return status == DIC_STATUS_OK;
 }
