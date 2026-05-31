@@ -5,3 +5,5 @@ build/
 indexed/
 *.log
 .idea
+*.html
+*.jp2
