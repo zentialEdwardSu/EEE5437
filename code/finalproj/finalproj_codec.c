@@ -127,34 +127,6 @@ double imageDecoder(
     return psnr;
 }
 
-int imageWriteJ2KStub(
-    const char *orgImageFileName,
-    const char *outputFileName
-)
-{
-    dic_image_u8 image = {0};
-    j2k_basic_params params = {0};
-    dic_status status;
-
-    if (orgImageFileName == NULL || outputFileName == NULL)
-        return 0;
-
-    status = dic_ppm_read(orgImageFileName, &image);
-    if (status != DIC_STATUS_OK)
-        return 0;
-
-    params.width = (uint32_t)image.width;
-    params.height = (uint32_t)image.height;
-    params.components = (uint16_t)image.channels;
-    params.decomposition_levels = FINALPROJ_LEVELS;
-    params.reversible = 1u;
-    params.multiple_component_transform = image.channels == 3 ? 1u : 0u;
-
-    status = j2k_write_empty_packet_codestream(outputFileName, &params);
-    dic_image_u8_free(&image);
-    return status == DIC_STATUS_OK;
-}
-
 int imageWriteJ2K(
     const char *orgImageFileName,
     const char *outputFileName,
@@ -172,34 +144,6 @@ int imageWriteJ2K(
         return 0;
 
     status = j2k_write_image_codestream(outputFileName, &image, FINALPROJ_LEVELS, quality);
-    dic_image_u8_free(&image);
-    return status == DIC_STATUS_OK;
-}
-
-int imageWriteJP2Stub(
-    const char *orgImageFileName,
-    const char *outputFileName
-)
-{
-    dic_image_u8 image = {0};
-    j2k_basic_params params = {0};
-    dic_status status;
-
-    if (orgImageFileName == NULL || outputFileName == NULL)
-        return 0;
-
-    status = dic_ppm_read(orgImageFileName, &image);
-    if (status != DIC_STATUS_OK)
-        return 0;
-
-    params.width = (uint32_t)image.width;
-    params.height = (uint32_t)image.height;
-    params.components = (uint16_t)image.channels;
-    params.decomposition_levels = FINALPROJ_LEVELS;
-    params.reversible = 1u;
-    params.multiple_component_transform = image.channels == 3 ? 1u : 0u;
-
-    status = jp2_write_minimal_file(outputFileName, &params);
     dic_image_u8_free(&image);
     return status == DIC_STATUS_OK;
 }

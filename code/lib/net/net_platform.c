@@ -1,7 +1,7 @@
 #include "net/net_platform.h"
 
 /**
- * Implements net's portable UDP socket and sleep operations.
+ * Implements net's portable UDP, TCP, and sleep operations.
  */
 
 #include <string.h>
@@ -92,24 +92,129 @@ static dic_status net_socket_make_nonblocking(net_socket socket_handle)
     return DIC_STATUS_OK;
 }
 
-dic_status net_socket_open_udp(net_socket *socket_handle, uint16_t bind_port)
+static void net_socket_any_ipv4_address(struct sockaddr_in *address, uint16_t port)
+{
+    memset(address, 0, sizeof(*address));
+    address->sin_family = AF_INET;
+    address->sin_addr.s_addr = htonl(INADDR_ANY);
+    address->sin_port = htons(port);
+}
+
+static dic_status net_socket_bind_ipv4(net_socket socket_handle, uint16_t bind_port)
 {
     struct sockaddr_in address;
+
+    net_socket_any_ipv4_address(&address, bind_port);
+    if (bind(socket_handle, (const struct sockaddr *)&address, sizeof(address)) != 0)
+        return DIC_STATUS_IO_ERROR;
+
+    return DIC_STATUS_OK;
+}
+
+static dic_status net_socket_open_ipv4(
+    net_socket *socket_handle,
+    int socket_type,
+    int protocol,
+    uint16_t bind_port,
+    int bind_requested,
+    int nonblocking_requested
+)
+{
     net_socket opened;
 
     if (socket_handle == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    opened = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    opened = socket(AF_INET, socket_type, protocol);
     if (opened == net_INVALID_SOCKET)
         return DIC_STATUS_IO_ERROR;
 
-    memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons(bind_port);
+    if (bind_requested && net_socket_bind_ipv4(opened, bind_port) != DIC_STATUS_OK)
+    {
+        net_socket_close(opened);
+        return DIC_STATUS_IO_ERROR;
+    }
 
-    if (bind(opened, (const struct sockaddr *)&address, sizeof(address)) != 0)
+    if (nonblocking_requested && net_socket_make_nonblocking(opened) != DIC_STATUS_OK)
+    {
+        net_socket_close(opened);
+        return DIC_STATUS_IO_ERROR;
+    }
+
+    *socket_handle = opened;
+    return DIC_STATUS_OK;
+}
+
+dic_status net_socket_open_udp(net_socket *socket_handle, uint16_t bind_port)
+{
+    return net_socket_open_ipv4(
+        socket_handle,
+        SOCK_DGRAM,
+        IPPROTO_UDP,
+        bind_port,
+        1,
+        1
+    );
+}
+
+dic_status net_socket_open_tcp_listener(net_socket *socket_handle, uint16_t bind_port)
+{
+    net_socket opened;
+    dic_status status;
+
+    status = net_socket_open_ipv4(
+        &opened,
+        SOCK_STREAM,
+        IPPROTO_TCP,
+        bind_port,
+        1,
+        1
+    );
+    if (status != DIC_STATUS_OK)
+        return status;
+
+    if (listen(opened, 1) != 0)
+    {
+        net_socket_close(opened);
+        return DIC_STATUS_IO_ERROR;
+    }
+
+    *socket_handle = opened;
+    return DIC_STATUS_OK;
+}
+
+dic_status net_socket_open_tcp_client(
+    net_socket *socket_handle,
+    const net_socket_address *address,
+    uint16_t bind_port
+)
+{
+    net_socket opened;
+    dic_status status;
+
+    if (socket_handle == NULL || address == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    status = net_socket_open_ipv4(
+        &opened,
+        SOCK_STREAM,
+        IPPROTO_TCP,
+        bind_port,
+        bind_port != 0u,
+        0
+    );
+    if (status != DIC_STATUS_OK)
+        return status;
+
+    if (connect(
+            opened,
+            (const struct sockaddr *)address->bytes,
+#if defined(_WIN32)
+            (int)address->size
+#else
+            (socklen_t)address->size
+#endif
+        ) != 0)
     {
         net_socket_close(opened);
         return DIC_STATUS_IO_ERROR;
@@ -216,6 +321,75 @@ dic_status net_socket_send_to(
     return DIC_STATUS_OK;
 }
 
+dic_status net_socket_accept_available(
+    net_socket listener,
+    net_socket *accepted
+)
+{
+    net_socket opened;
+
+    if (accepted == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    *accepted = net_INVALID_SOCKET;
+
+    if (listener == net_INVALID_SOCKET)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    opened = accept(listener, NULL, NULL);
+    if (opened != net_INVALID_SOCKET)
+    {
+        if (net_socket_make_nonblocking(opened) != DIC_STATUS_OK)
+        {
+            net_socket_close(opened);
+            return DIC_STATUS_IO_ERROR;
+        }
+        *accepted = opened;
+        return DIC_STATUS_OK;
+    }
+
+#if defined(_WIN32)
+    {
+        int error = WSAGetLastError();
+        if (error == WSAEWOULDBLOCK)
+            return DIC_STATUS_OK;
+    }
+#else
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+        return DIC_STATUS_OK;
+#endif
+
+    return DIC_STATUS_IO_ERROR;
+}
+
+dic_status net_socket_send_stream(
+    net_socket socket_handle,
+    const uint8_t *data,
+    size_t size
+)
+{
+    size_t offset = 0u;
+
+    if (socket_handle == net_INVALID_SOCKET || data == NULL || size == 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    while (offset < size)
+    {
+        int result = send(
+            socket_handle,
+            (const char *)(data + offset),
+            (int)(size - offset),
+            0
+        );
+
+        if (result <= 0)
+            return DIC_STATUS_IO_ERROR;
+
+        offset += (size_t)result;
+    }
+
+    return DIC_STATUS_OK;
+}
+
 dic_status net_socket_receive_available(
     net_socket socket_handle,
     uint8_t *data,
@@ -234,7 +408,7 @@ dic_status net_socket_receive_available(
     if (capacity > 65507u)
         capacity = 65507u;
 
-    result = recvfrom(socket_handle, (char *)data, (int)capacity, 0, NULL, NULL);
+    result = recv(socket_handle, (char *)data, (int)capacity, 0);
     if (result > 0)
     {
         *received = (size_t)result;

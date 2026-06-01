@@ -2,9 +2,11 @@
 
 /**
  * net is a small transport shim for tests and coursework tools that need a
- * controllable byte channel.  It can send bytes through either a UDP port or a
- * file-backed channel, can throttle accepted bytes, can simulate packet loss,
- * and keeps received bytes in a bounded internal buffer.
+ * controllable byte channel.  It can send bytes through a UDP port, a TCP
+ * stream, or a file-backed channel, can throttle accepted bytes, can simulate
+ * packet loss, and keeps received bytes in a bounded internal buffer.  TCP
+ * handles listen when peer_port is zero and connect to host:peer_port when
+ * peer_port is nonzero.
  */
 
 #include <stddef.h>
@@ -19,7 +21,8 @@ extern "C" {
 typedef enum net_transport
 {
     net_TRANSPORT_FILE = 1,
-    net_TRANSPORT_PORT = 2
+    net_TRANSPORT_PORT = 2,
+    net_TRANSPORT_TCP = 3
 } net_transport;
 
 typedef struct net_config
@@ -53,7 +56,7 @@ dic_status net_control_open(net_control **control, const net_config *config);
 void net_control_close(net_control *control);
 
 /**
- * Returns the bound UDP port, or zero when the handle is not port-backed.
+ * Returns the bound socket port, or zero when the handle is not socket-backed.
  */
 uint16_t net_control_port(const net_control *control);
 

@@ -19,23 +19,11 @@ double imageDecoder(
     const char *orgImageFileName
 );
 
-/** Writes a minimal raw J2K codestream stub for metadata and parser demos. */
-int imageWriteJ2KStub(
-    const char *orgImageFileName,
-    const char *outputFileName
-);
-
 /** Writes a raw J2K codestream; quality -1 is reversible, 1..100 is irreversible 9/7. */
 int imageWriteJ2K(
     const char *orgImageFileName,
     const char *outputFileName,
     int quality
-);
-
-/** Writes a minimal JP2 wrapper for metadata and parser demos. */
-int imageWriteJP2Stub(
-    const char *orgImageFileName,
-    const char *outputFileName
 );
 
 /** Writes a JP2 file; quality -1 is reversible, 1..100 is irreversible 9/7. */

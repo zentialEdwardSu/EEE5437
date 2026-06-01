@@ -1,8 +1,8 @@
 #include "net/net.h"
 
 /**
- * Implements net's control handle, file transport, UDP transport, throttling,
- * packet loss, and receive buffering.
+ * Implements net's control handle, file transport, UDP transport, TCP
+ * transport, throttling, packet loss, and receive buffering.
  */
 
 #include <stdio.h>
@@ -23,8 +23,10 @@ struct net_control
     long file_read_offset;
     long file_write_offset;
     net_socket socket_handle;
+    net_socket listen_socket;
     net_socket_address peer_address;
     int has_peer;
+    int socket_started;
     uint16_t bound_port;
     uint32_t random_state;
 };
@@ -59,10 +61,20 @@ static dic_status net_validate_config(const net_config *config)
             return DIC_STATUS_INVALID_ARGUMENT;
         return DIC_STATUS_OK;
     }
-    if (config->transport == net_TRANSPORT_PORT)
+    if (config->transport == net_TRANSPORT_PORT || config->transport == net_TRANSPORT_TCP)
         return DIC_STATUS_OK;
 
     return DIC_STATUS_INVALID_ARGUMENT;
+}
+
+static int net_is_socket_transport(net_transport transport)
+{
+    return transport == net_TRANSPORT_PORT || transport == net_TRANSPORT_TCP;
+}
+
+static int net_is_stream_transport(const net_control *control)
+{
+    return control->config.transport == net_TRANSPORT_TCP;
 }
 
 static uint32_t net_random_next(net_control *control)
@@ -119,38 +131,92 @@ static dic_status net_open_file_transport(net_control *control)
     return DIC_STATUS_OK;
 }
 
-static dic_status net_open_port_transport(net_control *control)
+static dic_status net_start_socket_transport(net_control *control)
 {
     dic_status status;
 
     status = net_socket_startup();
+    if (status == DIC_STATUS_OK)
+        control->socket_started = 1;
+
+    return status;
+}
+
+static dic_status net_store_bound_port(net_control *control, net_socket socket_handle)
+{
+    return net_socket_bound_port(socket_handle, &control->bound_port);
+}
+
+static dic_status net_store_peer_address(net_control *control)
+{
+    dic_status status;
+
+    status = net_socket_address_ipv4(
+        control->config.host,
+        control->config.peer_port,
+        &control->peer_address
+    );
+    if (status == DIC_STATUS_OK)
+        control->has_peer = 1;
+
+    return status;
+}
+
+static dic_status net_open_port_transport(net_control *control)
+{
+    dic_status status;
+
+    status = net_start_socket_transport(control);
     if (status != DIC_STATUS_OK)
         return status;
 
     status = net_socket_open_udp(&control->socket_handle, control->config.bind_port);
     if (status != DIC_STATUS_OK)
-    {
-        net_socket_cleanup();
         return status;
-    }
 
-    status = net_socket_bound_port(control->socket_handle, &control->bound_port);
+    status = net_store_bound_port(control, control->socket_handle);
     if (status != DIC_STATUS_OK)
         return status;
 
     if (control->config.peer_port != 0u)
+        return net_store_peer_address(control);
+
+    return DIC_STATUS_OK;
+}
+
+static dic_status net_open_tcp_transport(net_control *control)
+{
+    dic_status status;
+
+    status = net_start_socket_transport(control);
+    if (status != DIC_STATUS_OK)
+        return status;
+
+    if (control->config.peer_port == 0u)
     {
-        status = net_socket_address_ipv4(
-            control->config.host,
-            control->config.peer_port,
-            &control->peer_address
+        status = net_socket_open_tcp_listener(
+            &control->listen_socket,
+            control->config.bind_port
         );
         if (status != DIC_STATUS_OK)
             return status;
-        control->has_peer = 1;
+
+        return net_store_bound_port(control, control->listen_socket);
     }
 
-    return DIC_STATUS_OK;
+    status = net_store_peer_address(control);
+    if (status != DIC_STATUS_OK)
+        return status;
+
+    status = net_socket_open_tcp_client(
+        &control->socket_handle,
+        &control->peer_address,
+        control->config.bind_port
+    );
+    if (status != DIC_STATUS_OK)
+        return status;
+
+    return net_store_bound_port(control, control->socket_handle);
 }
 
 dic_status net_control_open(net_control **control, const net_config *config)
@@ -172,6 +238,7 @@ dic_status net_control_open(net_control **control, const net_config *config)
 
     opened->config = *config;
     opened->socket_handle = net_INVALID_SOCKET;
+    opened->listen_socket = net_INVALID_SOCKET;
     opened->random_state = config->random_seed == 0u ? 1u : config->random_seed;
     net_buffer_init(&opened->buffer);
 
@@ -180,6 +247,8 @@ dic_status net_control_open(net_control **control, const net_config *config)
         status = net_open_file_transport(opened);
     if (status == DIC_STATUS_OK && config->transport == net_TRANSPORT_PORT)
         status = net_open_port_transport(opened);
+    if (status == DIC_STATUS_OK && config->transport == net_TRANSPORT_TCP)
+        status = net_open_tcp_transport(opened);
 
     if (status != DIC_STATUS_OK)
     {
@@ -199,10 +268,11 @@ void net_control_close(net_control *control)
     if (control->file != NULL)
         fclose(control->file);
     if (control->socket_handle != net_INVALID_SOCKET)
-    {
         net_socket_close(control->socket_handle);
+    if (control->listen_socket != net_INVALID_SOCKET)
+        net_socket_close(control->listen_socket);
+    if (control->socket_started)
         net_socket_cleanup();
-    }
 
     net_buffer_free(&control->buffer);
     free(control);
@@ -210,7 +280,9 @@ void net_control_close(net_control *control)
 
 uint16_t net_control_port(const net_control *control)
 {
-    if (control == NULL || control->config.transport != net_TRANSPORT_PORT)
+    if (control == NULL)
+        return 0u;
+    if (!net_is_socket_transport(control->config.transport))
         return 0u;
 
     return control->bound_port;
@@ -265,11 +337,30 @@ static dic_status net_send_file(net_control *control, const uint8_t *data, size_
     return DIC_STATUS_OK;
 }
 
-static dic_status net_send_port(net_control *control, const uint8_t *data, size_t size)
+static dic_status net_send_socket_chunk(
+    net_control *control,
+    const uint8_t *data,
+    size_t size
+)
+{
+    if (net_is_stream_transport(control))
+        return net_socket_send_stream(control->socket_handle, data, size);
+
+    return net_socket_send_to(
+        control->socket_handle,
+        &control->peer_address,
+        data,
+        size
+    );
+}
+
+static dic_status net_send_socket(net_control *control, const uint8_t *data, size_t size)
 {
     size_t offset = 0u;
 
-    if (!control->has_peer)
+    if (control->socket_handle == net_INVALID_SOCKET)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (!net_is_stream_transport(control) && !control->has_peer)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     while (offset < size)
@@ -277,17 +368,12 @@ static dic_status net_send_port(net_control *control, const uint8_t *data, size_
         size_t chunk_size = size - offset;
         dic_status status;
 
-        if (chunk_size > net_PORT_CHUNK_SIZE)
+        if (!net_is_stream_transport(control) && chunk_size > net_PORT_CHUNK_SIZE)
             chunk_size = net_PORT_CHUNK_SIZE;
 
         if (!net_should_drop(control))
         {
-            status = net_socket_send_to(
-                control->socket_handle,
-                &control->peer_address,
-                data + offset,
-                chunk_size
-            );
+            status = net_send_socket_chunk(control, data + offset, chunk_size);
             if (status != DIC_STATUS_OK)
                 return status;
         }
@@ -319,7 +405,7 @@ dic_status net_send(
     if (control->config.transport == net_TRANSPORT_FILE)
         status = net_send_file(control, (const uint8_t *)data, size);
     else
-        status = net_send_port(control, (const uint8_t *)data, size);
+        status = net_send_socket(control, (const uint8_t *)data, size);
 
     if (status == DIC_STATUS_OK && sent != NULL)
         *sent = size;
@@ -360,14 +446,42 @@ static dic_status net_drain_file(net_control *control)
     return DIC_STATUS_OK;
 }
 
-static dic_status net_drain_port(net_control *control)
+static dic_status net_accept_tcp_client(net_control *control)
+{
+    net_socket accepted = net_INVALID_SOCKET;
+    dic_status status;
+
+    if (control->socket_handle != net_INVALID_SOCKET)
+        return DIC_STATUS_OK;
+    if (control->listen_socket == net_INVALID_SOCKET)
+        return DIC_STATUS_OK;
+
+    status = net_socket_accept_available(control->listen_socket, &accepted);
+    if (status != DIC_STATUS_OK)
+        return status;
+    if (accepted != net_INVALID_SOCKET)
+        control->socket_handle = accepted;
+
+    return DIC_STATUS_OK;
+}
+
+static dic_status net_drain_socket(net_control *control)
 {
     uint8_t temp[net_PORT_CHUNK_SIZE];
+    dic_status status;
+
+    if (net_is_stream_transport(control))
+    {
+        status = net_accept_tcp_client(control);
+        if (status != DIC_STATUS_OK)
+            return status;
+    }
+    if (control->socket_handle == net_INVALID_SOCKET)
+        return DIC_STATUS_OK;
 
     while (net_buffer_free_space(&control->buffer) > 0u)
     {
         size_t received = 0u;
-        dic_status status;
 
         status = net_socket_receive_available(
             control->socket_handle,
@@ -409,7 +523,7 @@ dic_status net_receive(
     if (control->config.transport == net_TRANSPORT_FILE)
         status = net_drain_file(control);
     else
-        status = net_drain_port(control);
+        status = net_drain_socket(control);
     if (status != DIC_STATUS_OK)
         return status;
 

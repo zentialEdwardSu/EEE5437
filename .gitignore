@@ -9,3 +9,5 @@ indexed/
 *.jp2
 .worktrees/
 *.bit
+*.ppm
+*.pgm

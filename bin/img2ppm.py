@@ -24,7 +24,8 @@ def convert_image(
     output_path: Path,
     output_format: str | None = None,
     size: tuple[int, int] | None = None,
-) -> None:
+    grey: bool = False,
+) -> Path:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file does not exist: {input_path}")
 
@@ -43,25 +44,30 @@ def convert_image(
 
         output_format = output_format.upper()
 
-        if output_format in {"JPG"}:
+        if output_format == "JPG":
             output_format = "JPEG"
 
-        if output_format in {"JPEG", "PPM", "BMP"}:
-            img = img.convert("RGB")
-        elif output_format == "PNG":
-            if img.mode not in {"RGB", "RGBA"}:
-                img = img.convert("RGBA")
-        elif output_format == "WEBP":
-            if img.mode not in {"RGB", "RGBA"}:
-                img = img.convert("RGBA")
+        if grey:
+            img = img.convert("L")
+
+            if output_format == "PPM":
+                output_path = output_path.with_suffix(".pgm")
+        else:
+            if output_format in {"JPEG", "PPM", "BMP"}:
+                img = img.convert("RGB")
+            elif output_format in {"PNG", "WEBP"}:
+                if img.mode not in {"RGB", "RGBA"}:
+                    img = img.convert("RGBA")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(output_path, format=output_format)
 
+    return output_path
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Read images, resize them, and export to the specified format"
+        description="Read images, resize them, optionally convert to grey, and export to the specified format"
     )
 
     parser.add_argument(
@@ -97,20 +103,28 @@ def main() -> None:
         help="Output size, format is WIDTHxHEIGHT, e.g., 800x600",
     )
 
+    parser.add_argument(
+        "--grey",
+        "--gray",
+        action="store_true",
+        help="Convert image to greyscale before saving",
+    )
+
     args = parser.parse_args()
 
     try:
-        convert_image(
+        actual_output = convert_image(
             input_path=args.input,
             output_path=args.output,
             output_format=args.format,
             size=args.size,
+            grey=args.grey,
         )
     except Exception as e:
         print(f"Error: {e}")
         raise SystemExit(1)
 
-    print(f"Exported: {args.output}")
+    print(f"Exported: {actual_output}")
 
 
 if __name__ == "__main__":

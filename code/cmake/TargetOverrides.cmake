@@ -3,6 +3,10 @@ function(dic_apply_target_overrides)
         target_link_libraries(lib_net PUBLIC ws2_32)
     endif()
 
+    if(TARGET finalproj)
+        target_link_libraries(finalproj PRIVATE cargs::cargs)
+    endif()
+
     if(TARGET hw4_impl)
         target_link_libraries(hw4_impl PUBLIC hw1_impl hw2_impl opencv_core opencv_imgcodecs opencv_imgproc)
         target_include_directories(
