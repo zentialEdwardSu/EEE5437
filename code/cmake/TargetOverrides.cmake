@@ -1,4 +1,8 @@
 function(dic_apply_target_overrides)
+    if(TARGET lib_libnet AND WIN32)
+        target_link_libraries(lib_libnet PUBLIC ws2_32)
+    endif()
+
     if(TARGET hw4_impl)
         target_link_libraries(hw4_impl PUBLIC hw1_impl hw2_impl opencv_core opencv_imgcodecs opencv_imgproc)
         target_include_directories(
