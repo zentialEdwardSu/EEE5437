@@ -8,3 +8,4 @@ indexed/
 *.html
 *.jp2
 .worktrees/
+*.bit

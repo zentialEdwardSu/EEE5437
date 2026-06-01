@@ -1,3 +1,8 @@
+/**
+ * @file dic_subband.c
+ * @brief Implements packed 5/3 DWT subband rectangle calculations.
+ */
+
 #include "codec/dic_subband.h"
 
 #include "wavelet/dic_dwt53.h"

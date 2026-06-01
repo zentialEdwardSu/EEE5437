@@ -1,3 +1,8 @@
+/**
+ * @file dic_basic_codec.c
+ * @brief Implements the basic 5/3-DWT image codec pipeline.
+ */
+
 #include "codec/dic_basic_codec.h"
 
 #include <stdlib.h>

@@ -13,7 +13,7 @@
 
 #include "j2k/jp2_file.h"
 #include "j2k/j2k_debug.h"
-
+#include "fs/fs.h"
 #include <stdio.h>
 
 enum
@@ -24,24 +24,9 @@ enum
     jp2_ENUMERATED_GREYSCALE = 17
 };
 
-/* Reference: paper/T-REC-T.800-200208.pdf, Annex I.4-I.5, JP2 file format and box structure. */
-static FILE *jp2_open_file(const char *path, const char *mode)
-{
-    j2k_DEBUG_ENTER();
-    FILE *file = NULL;
-#if defined(_MSC_VER)
-    if (fopen_s(&file, path, mode) != 0)
-        return NULL;
-    return file;
-#else
-    return fopen(path, mode);
-#endif
-}
-
-/* Reference: paper/T-REC-T.800-200208.pdf, Annex I.4, JP2 box fields are serialized in file byte order. */
+/* u8 writer*/
 static int jp2_write_u8(FILE *file, unsigned int value)
 {
-    j2k_DEBUG_ENTER();
     return fputc((int)(value & 0xffu), file) != EOF;
 }
 
@@ -144,7 +129,7 @@ dic_status jp2_write_minimal_file(
     if (params->components != 1u && params->components != 3u)
         return DIC_J2K_INVALID_COMPONENTS;
 
-    file = jp2_open_file(path, "wb");
+    file = fs_open_file(path, "wb");
     if (file == NULL)
         return DIC_STATUS_IO_ERROR;
 
@@ -181,7 +166,7 @@ dic_status jp2_write_file_with_codestream_payload(
     if (params->components != 1u && params->components != 3u)
         return DIC_J2K_INVALID_COMPONENTS;
 
-    file = jp2_open_file(path, "wb");
+    file = fs_open_file(path, "wb");
     if (file == NULL)
         return DIC_STATUS_IO_ERROR;
 
@@ -218,7 +203,7 @@ dic_status jp2_write_file_with_codestream_tile_parts(
     if (params->components != 1u && params->components != 3u)
         return DIC_J2K_INVALID_COMPONENTS;
 
-    file = jp2_open_file(path, "wb");
+    file = fs_open_file(path, "wb");
     if (file == NULL)
         return DIC_STATUS_IO_ERROR;
 

@@ -1,3 +1,8 @@
+/**
+ * @file dic_metrics.c
+ * @brief Implements MSE, PSNR, and bitrate metrics for codec output.
+ */
+
 #include "codec/dic_metrics.h"
 
 #include <math.h>

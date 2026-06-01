@@ -1,3 +1,8 @@
+/**
+ * @file dic_quant.c
+ * @brief Implements scalar quantization and dequantization for codec coefficients.
+ */
+
 #include "codec/dic_quant.h"
 
 #include <stddef.h>
@@ -17,9 +22,7 @@ dic_status dic_quant_scalar_i32(int32_t *values, size_t count, int step_size)
 {
     size_t i;
 
-    if (values == NULL && count > 0u)
-        return DIC_STATUS_INVALID_ARGUMENT;
-    if (step_size <= 0)
+    if ((values == NULL && count > 0u) || step_size <= 0)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     for (i = 0; i < count; ++i)
@@ -32,9 +35,7 @@ dic_status dic_dequant_scalar_i32(int32_t *values, size_t count, int step_size)
 {
     size_t i;
 
-    if (values == NULL && count > 0u)
-        return DIC_STATUS_INVALID_ARGUMENT;
-    if (step_size <= 0)
+    if ((values == NULL && count > 0u) || step_size <= 0)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     if (step_size == 1)

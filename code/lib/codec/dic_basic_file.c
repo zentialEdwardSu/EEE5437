@@ -1,3 +1,8 @@
+/**
+ * @file dic_basic_file.c
+ * @brief Implements DICW serialization with Huffman-coded scan-symbol tokens.
+ */
+
 #include "codec/dic_basic_file.h"
 
 #include <stdint.h>

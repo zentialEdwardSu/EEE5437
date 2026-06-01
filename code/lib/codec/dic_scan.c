@@ -1,3 +1,8 @@
+/**
+ * @file dic_scan.c
+ * @brief Implements coefficient scanning and embedded zerotree markers.
+ */
+
 #include "codec/dic_scan.h"
 
 #include <stdlib.h>

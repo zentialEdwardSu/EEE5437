@@ -2,10 +2,9 @@
  * @file finalproj_codec.c
  * @brief Assignment-facing codec API plus JPEG 2000 demo helpers.
  *
- * The final project API keeps the course task surface small: imageEncoder writes
- * image.bit with the basic 5/3-DWT, quantization, prediction, scan/EZT, and
+ * Impl imageEncoder writes image.bit with the basic 5/3-DWT, quantization, prediction, scan/EZT, and
  * Huffman path; imageDecoder reconstructs image_recon.pgm or image_recon.ppm and
- * reports PSNR. JPEG 2000 helpers are retained as a separate standard-codec path.
+ * reports PSNR. 
  */
 
 #include "finalproj/finalproj_codec.h"
@@ -22,18 +21,15 @@
 #include "j2k/j2k_parse.h"
 #include "j2k/jp2_file.h"
 #include "ppm/ppm.h"
+#include "fs/fs.h"
 
 static long finalproj_file_size_bytes(const char *path)
 {
     FILE *file = NULL;
     long size = -1;
 
-#if defined(_MSC_VER)
-    if (fopen_s(&file, path, "rb") != 0)
-#else
-    file = fopen(path, "rb");
+    file = fs_open_file(path, "rb");
     if (file == NULL)
-#endif
         return -1;
 
     if (fseek(file, 0, SEEK_END) == 0)

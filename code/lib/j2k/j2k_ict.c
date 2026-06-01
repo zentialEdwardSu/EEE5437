@@ -2,7 +2,7 @@
  * @file j2k_ict.c
  * @brief Implements the irreversible multiple component transform from T.800 Annex G.
  *
- * The forward and inverse routines operate in-place on interleaved double RGB
+ * The forward and inverse operate in-place on interleaved double RGB
  * samples after level shift. The forward path uses the JPEG 2000 ICT
  * coefficients from Annex G. The inverse path solves the same fixed transform
  * matrix, avoiding loss from composing two separately rounded coefficient sets.

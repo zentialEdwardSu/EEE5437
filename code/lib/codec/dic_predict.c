@@ -1,3 +1,8 @@
+/**
+ * @file dic_predict.c
+ * @brief Implements row-wise left prediction for LL wavelet coefficients.
+ */
+
 #include "codec/dic_predict.h"
 
 #include <stddef.h>
