@@ -1,13 +1,13 @@
-#include "libnet/libnet_buffer.h"
+#include "net/net_buffer.h"
 
 /**
- * Implements libnet's internal bounded FIFO buffer with wrap-around indexing.
+ * Implements net's internal bounded FIFO buffer with wrap-around indexing.
  */
 
 #include <stdlib.h>
 #include <string.h>
 
-void libnet_buffer_init(libnet_buffer *buffer)
+void net_buffer_init(net_buffer *buffer)
 {
     if (buffer == NULL)
         return;
@@ -18,12 +18,12 @@ void libnet_buffer_init(libnet_buffer *buffer)
     buffer->length = 0u;
 }
 
-dic_status libnet_buffer_alloc(libnet_buffer *buffer, size_t capacity)
+dic_status net_buffer_alloc(net_buffer *buffer, size_t capacity)
 {
     if (buffer == NULL || capacity == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    libnet_buffer_free(buffer);
+    net_buffer_free(buffer);
     buffer->data = (uint8_t *)malloc(capacity);
     if (buffer->data == NULL)
         return DIC_STATUS_MEMORY_ERROR;
@@ -34,23 +34,23 @@ dic_status libnet_buffer_alloc(libnet_buffer *buffer, size_t capacity)
     return DIC_STATUS_OK;
 }
 
-void libnet_buffer_free(libnet_buffer *buffer)
+void net_buffer_free(net_buffer *buffer)
 {
     if (buffer == NULL)
         return;
 
     free(buffer->data);
-    libnet_buffer_init(buffer);
+    net_buffer_init(buffer);
 }
 
-dic_status libnet_buffer_push(libnet_buffer *buffer, const uint8_t *data, size_t size)
+dic_status net_buffer_push(net_buffer *buffer, const uint8_t *data, size_t size)
 {
     size_t write_index;
     size_t first_count;
 
     if (buffer == NULL || data == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
-    if (size > libnet_buffer_free_space(buffer))
+    if (size > net_buffer_free_space(buffer))
         return DIC_STATUS_IO_ERROR;
     if (size == 0u)
         return DIC_STATUS_OK;
@@ -66,7 +66,7 @@ dic_status libnet_buffer_push(libnet_buffer *buffer, const uint8_t *data, size_t
     return DIC_STATUS_OK;
 }
 
-size_t libnet_buffer_pop(libnet_buffer *buffer, uint8_t *data, size_t capacity)
+size_t net_buffer_pop(net_buffer *buffer, uint8_t *data, size_t capacity)
 {
     size_t count;
     size_t first_count;
@@ -94,7 +94,7 @@ size_t libnet_buffer_pop(libnet_buffer *buffer, uint8_t *data, size_t capacity)
     return count;
 }
 
-size_t libnet_buffer_free_space(const libnet_buffer *buffer)
+size_t net_buffer_free_space(const net_buffer *buffer)
 {
     if (buffer == NULL || buffer->data == NULL || buffer->capacity < buffer->length)
         return 0u;

@@ -1,6 +1,6 @@
 function(dic_apply_target_overrides)
-    if(TARGET lib_libnet AND WIN32)
-        target_link_libraries(lib_libnet PUBLIC ws2_32)
+    if(TARGET lib_net AND WIN32)
+        target_link_libraries(lib_net PUBLIC ws2_32)
     endif()
 
     if(TARGET hw4_impl)

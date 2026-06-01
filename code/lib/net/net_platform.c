@@ -1,7 +1,7 @@
-#include "libnet/libnet_platform.h"
+#include "net/net_platform.h"
 
 /**
- * Implements libnet's portable UDP socket and sleep operations.
+ * Implements net's portable UDP socket and sleep operations.
  */
 
 #include <string.h>
@@ -18,7 +18,7 @@
 #include <arpa/inet.h>
 #endif
 
-FILE *libnet_platform_open_file(const char *path, const char *mode)
+FILE *net_platform_open_file(const char *path, const char *mode)
 {
     FILE *file = NULL;
 
@@ -34,7 +34,7 @@ FILE *libnet_platform_open_file(const char *path, const char *mode)
 #endif
 }
 
-void libnet_platform_sleep_ms(uint32_t milliseconds)
+void net_platform_sleep_ms(uint32_t milliseconds)
 {
     if (milliseconds == 0u)
         return;
@@ -54,7 +54,7 @@ void libnet_platform_sleep_ms(uint32_t milliseconds)
 #endif
 }
 
-dic_status libnet_socket_startup(void)
+dic_status net_socket_startup(void)
 {
 #if defined(_WIN32)
     WSADATA data;
@@ -66,14 +66,14 @@ dic_status libnet_socket_startup(void)
     return DIC_STATUS_OK;
 }
 
-void libnet_socket_cleanup(void)
+void net_socket_cleanup(void)
 {
 #if defined(_WIN32)
     WSACleanup();
 #endif
 }
 
-static dic_status libnet_socket_make_nonblocking(libnet_socket socket_handle)
+static dic_status net_socket_make_nonblocking(net_socket socket_handle)
 {
 #if defined(_WIN32)
     u_long mode = 1u;
@@ -92,16 +92,16 @@ static dic_status libnet_socket_make_nonblocking(libnet_socket socket_handle)
     return DIC_STATUS_OK;
 }
 
-dic_status libnet_socket_open_udp(libnet_socket *socket_handle, uint16_t bind_port)
+dic_status net_socket_open_udp(net_socket *socket_handle, uint16_t bind_port)
 {
     struct sockaddr_in address;
-    libnet_socket opened;
+    net_socket opened;
 
     if (socket_handle == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     opened = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (opened == LIBNET_INVALID_SOCKET)
+    if (opened == net_INVALID_SOCKET)
         return DIC_STATUS_IO_ERROR;
 
     memset(&address, 0, sizeof(address));
@@ -111,13 +111,13 @@ dic_status libnet_socket_open_udp(libnet_socket *socket_handle, uint16_t bind_po
 
     if (bind(opened, (const struct sockaddr *)&address, sizeof(address)) != 0)
     {
-        libnet_socket_close(opened);
+        net_socket_close(opened);
         return DIC_STATUS_IO_ERROR;
     }
 
-    if (libnet_socket_make_nonblocking(opened) != DIC_STATUS_OK)
+    if (net_socket_make_nonblocking(opened) != DIC_STATUS_OK)
     {
-        libnet_socket_close(opened);
+        net_socket_close(opened);
         return DIC_STATUS_IO_ERROR;
     }
 
@@ -125,9 +125,9 @@ dic_status libnet_socket_open_udp(libnet_socket *socket_handle, uint16_t bind_po
     return DIC_STATUS_OK;
 }
 
-void libnet_socket_close(libnet_socket socket_handle)
+void net_socket_close(net_socket socket_handle)
 {
-    if (socket_handle == LIBNET_INVALID_SOCKET)
+    if (socket_handle == net_INVALID_SOCKET)
         return;
 
 #if defined(_WIN32)
@@ -137,7 +137,7 @@ void libnet_socket_close(libnet_socket socket_handle)
 #endif
 }
 
-dic_status libnet_socket_bound_port(libnet_socket socket_handle, uint16_t *port)
+dic_status net_socket_bound_port(net_socket socket_handle, uint16_t *port)
 {
     struct sockaddr_in address;
 #if defined(_WIN32)
@@ -146,7 +146,7 @@ dic_status libnet_socket_bound_port(libnet_socket socket_handle, uint16_t *port)
     socklen_t length = (socklen_t)sizeof(address);
 #endif
 
-    if (port == NULL || socket_handle == LIBNET_INVALID_SOCKET)
+    if (port == NULL || socket_handle == net_INVALID_SOCKET)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     memset(&address, 0, sizeof(address));
@@ -157,10 +157,10 @@ dic_status libnet_socket_bound_port(libnet_socket socket_handle, uint16_t *port)
     return DIC_STATUS_OK;
 }
 
-dic_status libnet_socket_address_ipv4(
+dic_status net_socket_address_ipv4(
     const char *host,
     uint16_t port,
-    libnet_socket_address *address
+    net_socket_address *address
 )
 {
     struct sockaddr_in ipv4;
@@ -183,16 +183,16 @@ dic_status libnet_socket_address_ipv4(
     return DIC_STATUS_OK;
 }
 
-dic_status libnet_socket_send_to(
-    libnet_socket socket_handle,
-    const libnet_socket_address *address,
+dic_status net_socket_send_to(
+    net_socket socket_handle,
+    const net_socket_address *address,
     const uint8_t *data,
     size_t size
 )
 {
     int result;
 
-    if (socket_handle == LIBNET_INVALID_SOCKET || address == NULL || data == NULL || size == 0u)
+    if (socket_handle == net_INVALID_SOCKET || address == NULL || data == NULL || size == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (size > 65507u)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -216,8 +216,8 @@ dic_status libnet_socket_send_to(
     return DIC_STATUS_OK;
 }
 
-dic_status libnet_socket_receive_available(
-    libnet_socket socket_handle,
+dic_status net_socket_receive_available(
+    net_socket socket_handle,
     uint8_t *data,
     size_t capacity,
     size_t *received
@@ -229,7 +229,7 @@ dic_status libnet_socket_receive_available(
         return DIC_STATUS_INVALID_ARGUMENT;
     *received = 0u;
 
-    if (socket_handle == LIBNET_INVALID_SOCKET || data == NULL || capacity == 0u)
+    if (socket_handle == net_INVALID_SOCKET || data == NULL || capacity == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (capacity > 65507u)
         capacity = 65507u;
