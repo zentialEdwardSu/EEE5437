@@ -4,7 +4,7 @@ function(dic_apply_target_overrides)
     endif()
 
     if(TARGET finalproj)
-        target_link_libraries(finalproj PRIVATE cargs::cargs)
+        target_link_libraries(finalproj PRIVATE cargs)
     endif()
 
     if(TARGET hw4_impl)

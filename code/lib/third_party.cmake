@@ -46,17 +46,3 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(opencv)
 
 FetchContent_GetProperties(cargs)
-if(NOT cargs_POPULATED)
-    FetchContent_Populate(cargs)
-endif()
-
-add_library(
-    cargs
-    STATIC
-    "${cargs_SOURCE_DIR}/src/cargs.c"
-)
-target_include_directories(cargs PUBLIC "${cargs_SOURCE_DIR}/include")
-
-if(NOT TARGET cargs::cargs)
-    add_library(cargs::cargs ALIAS cargs)
-endif()
