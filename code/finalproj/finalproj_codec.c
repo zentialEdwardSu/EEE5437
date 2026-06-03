@@ -12,9 +12,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "codec/dic_basic_codec.h"
-#include "codec/dic_basic_file.h"
-#include "codec/dic_metrics.h"
+#include "codec/basic_codec.h"
+#include "codec/basic_file.h"
+#include "codec/metrics.h"
 #include "image_u8/image_u8.h"
 #include "j2k/j2k_codestream.h"
 #include "j2k/j2k_image.h"
@@ -41,7 +41,7 @@ static long finalproj_file_size_bytes(const char *path)
 double imageEncoder(const char *orgImageFileName, int quantizationStepSize)
 {
     dic_image_u8 original = {0};
-    dic_basic_encoded_image encoded = {0};
+    codec_basic_encoded_image encoded = {0};
     long bitstream_size;
     double bitrate = -1.0;
 
@@ -51,7 +51,7 @@ double imageEncoder(const char *orgImageFileName, int quantizationStepSize)
     if (dic_ppm_read(orgImageFileName, &original) != DIC_STATUS_OK)
         return -1.0;
 
-    if (dic_basic_encode_image(
+    if (codec_basic_encode_image(
             original.data,
             original.width,
             original.height,
@@ -64,14 +64,14 @@ double imageEncoder(const char *orgImageFileName, int quantizationStepSize)
         return -1.0;
     }
 
-    if (dic_basic_write_file(FINALPROJ_BITSTREAM_PATH, &encoded) == DIC_STATUS_OK)
+    if (codec_basic_write_file(FINALPROJ_BITSTREAM_PATH, &encoded) == DIC_STATUS_OK)
     {
         bitstream_size = finalproj_file_size_bytes(FINALPROJ_BITSTREAM_PATH);
         if (bitstream_size >= 0)
-            bitrate = dic_metric_bitrate((size_t)bitstream_size * 8u, original.width, original.height);
+            bitrate = codec_metric_bitrate((size_t)bitstream_size * 8u, original.width, original.height);
     }
 
-    dic_basic_encoded_free(&encoded);
+    codec_basic_encoded_free(&encoded);
     dic_image_u8_free(&original);
     return bitrate;
 }
@@ -82,7 +82,7 @@ double imageDecoder(
     const char *orgImageFileName
 )
 {
-    dic_basic_encoded_image encoded = {0};
+    codec_basic_encoded_image encoded = {0};
     dic_image_u8 original = {0};
     dic_image_u8 decoded = {0};
     const char *reconstruction_path;
@@ -92,17 +92,17 @@ double imageDecoder(
     if (bitstreamFileName == NULL || orgImageFileName == NULL || quantizationStepSize <= 0)
         return -1.0;
 
-    if (dic_basic_read_file(bitstreamFileName, &encoded) != DIC_STATUS_OK)
+    if (codec_basic_read_file(bitstreamFileName, &encoded) != DIC_STATUS_OK)
         return -1.0;
     if (encoded.quant_step != quantizationStepSize)
     {
-        dic_basic_encoded_free(&encoded);
+        codec_basic_encoded_free(&encoded);
         return -1.0;
     }
 
-    if (dic_basic_decode_image(&encoded, &decoded) != DIC_STATUS_OK)
+    if (codec_basic_decode_image(&encoded, &decoded) != DIC_STATUS_OK)
     {
-        dic_basic_encoded_free(&encoded);
+        codec_basic_encoded_free(&encoded);
         return -1.0;
     }
 
@@ -112,7 +112,7 @@ double imageDecoder(
         && original.channels == decoded.channels)
     {
         sample_count = dic_image_u8_sample_count(original.width, original.height, original.channels);
-        psnr = dic_metric_psnr_u8(original.data, decoded.data, sample_count);
+        psnr = codec_metric_psnr_u8(original.data, decoded.data, sample_count);
     }
 
     reconstruction_path = decoded.channels == 1
@@ -123,7 +123,7 @@ double imageDecoder(
 
     dic_image_u8_free(&original);
     dic_image_u8_free(&decoded);
-    dic_basic_encoded_free(&encoded);
+    codec_basic_encoded_free(&encoded);
     return psnr;
 }
 

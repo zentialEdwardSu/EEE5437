@@ -1,19 +1,19 @@
 /**
- * @file dic_basic_codec.c
+ * @file basic_codec.c
  * @brief Implements the basic 5/3-DWT image codec pipeline.
  */
 
-#include "codec/dic_basic_codec.h"
+#include "codec/basic_codec.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "codec/dic_predict.h"
-#include "codec/dic_quant.h"
-#include "codec/dic_subband.h"
+#include "codec/predict.h"
+#include "codec/quant.h"
+#include "codec/subband.h"
 #include "wavelet/dic_dwt53.h"
 
-void dic_basic_encoded_init(dic_basic_encoded_image *encoded)
+void codec_basic_encoded_init(codec_basic_encoded_image *encoded)
 {
     if (encoded == NULL)
         return;
@@ -26,7 +26,7 @@ void dic_basic_encoded_init(dic_basic_encoded_image *encoded)
     encoded->channel_streams = NULL;
 }
 
-void dic_basic_encoded_free(dic_basic_encoded_image *encoded)
+void codec_basic_encoded_free(codec_basic_encoded_image *encoded)
 {
     int channel;
 
@@ -39,10 +39,10 @@ void dic_basic_encoded_free(dic_basic_encoded_image *encoded)
             free(encoded->channel_streams[channel].symbols);
     }
     free(encoded->channel_streams);
-    dic_basic_encoded_init(encoded);
+    codec_basic_encoded_init(encoded);
 }
 
-static dic_status dic_basic_validate_params(
+static dic_status codec_basic_validate_params(
     int width,
     int height,
     int channels,
@@ -64,8 +64,8 @@ static dic_status dic_basic_validate_params(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_basic_prepare_output(
-    dic_basic_encoded_image *encoded,
+static dic_status codec_basic_prepare_output(
+    codec_basic_encoded_image *encoded,
     int width,
     int height,
     int channels,
@@ -73,9 +73,9 @@ static dic_status dic_basic_prepare_output(
     int quant_step
 )
 {
-    dic_basic_encoded_free(encoded);
+    codec_basic_encoded_free(encoded);
 
-    encoded->channel_streams = (dic_basic_channel_stream *)calloc(
+    encoded->channel_streams = (codec_basic_channel_stream *)calloc(
         (size_t)channels,
         sizeof(encoded->channel_streams[0])
     );
@@ -90,7 +90,7 @@ static dic_status dic_basic_prepare_output(
     return DIC_STATUS_OK;
 }
 
-static void dic_basic_copy_channel_to_plane(
+static void codec_basic_copy_channel_to_plane(
     const uint8_t *input,
     int width,
     int height,
@@ -113,7 +113,7 @@ static void dic_basic_copy_channel_to_plane(
     }
 }
 
-static uint8_t dic_basic_clamp_u8(int32_t value)
+static uint8_t codec_basic_clamp_u8(int32_t value)
 {
     if (value < 0)
         return 0u;
@@ -122,7 +122,7 @@ static uint8_t dic_basic_clamp_u8(int32_t value)
     return (uint8_t)value;
 }
 
-static void dic_basic_copy_plane_to_channel(
+static void codec_basic_copy_plane_to_channel(
     const int32_t *plane,
     int width,
     int height,
@@ -141,19 +141,19 @@ static void dic_basic_copy_plane_to_channel(
         {
             size_t pixel = ((size_t)y * (size_t)width) + (size_t)x;
             output[(pixel * (size_t)channels) + (size_t)channel] =
-                dic_basic_clamp_u8(plane[pixel]);
+                codec_basic_clamp_u8(plane[pixel]);
         }
     }
 }
 
-dic_status dic_basic_encode_image(
+dic_status codec_basic_encode_image(
     const uint8_t *input,
     int width,
     int height,
     int channels,
     int levels,
     int quant_step,
-    dic_basic_encoded_image *encoded
+    codec_basic_encoded_image *encoded
 )
 {
     size_t plane_count;
@@ -165,7 +165,7 @@ dic_status dic_basic_encode_image(
     if (input == NULL || encoded == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_basic_validate_params(width, height, channels, levels, quant_step);
+    status = codec_basic_validate_params(width, height, channels, levels, quant_step);
     if (status != DIC_STATUS_OK)
         return status;
 
@@ -174,41 +174,41 @@ dic_status dic_basic_encode_image(
     if (plane == NULL)
         return DIC_STATUS_MEMORY_ERROR;
 
-    status = dic_basic_prepare_output(encoded, width, height, channels, levels, quant_step);
+    status = codec_basic_prepare_output(encoded, width, height, channels, levels, quant_step);
     if (status != DIC_STATUS_OK)
     {
         free(plane);
         return status;
     }
 
-    status = dic_subband_lowest_ll_rect(width, height, levels, &ll_rect);
+    status = codec_subband_lowest_ll_rect(width, height, levels, &ll_rect);
     if (status != DIC_STATUS_OK)
     {
         free(plane);
-        dic_basic_encoded_free(encoded);
+        codec_basic_encoded_free(encoded);
         return status;
     }
 
     for (channel = 0; channel < channels; ++channel)
     {
-        dic_scan_symbol_buffer buffer;
+        codec_scan_symbol_buffer buffer;
 
-        dic_scan_symbol_buffer_init(&buffer);
-        dic_basic_copy_channel_to_plane(input, width, height, channels, channel, plane);
+        codec_scan_symbol_buffer_init(&buffer);
+        codec_basic_copy_channel_to_plane(input, width, height, channels, channel, plane);
 
         status = dic_dwt53_forward_plane(plane, width, height, levels);
         if (status == DIC_STATUS_OK)
-            status = dic_quant_scalar_i32(plane, plane_count, quant_step);
+            status = codec_quant_scalar_i32(plane, plane_count, quant_step);
         if (status == DIC_STATUS_OK)
-            status = dic_predict_ll_left(plane, width, ll_rect);
+            status = codec_predict_ll_left(plane, width, ll_rect);
         if (status == DIC_STATUS_OK)
-            status = dic_scan_encode_plane(plane, width, height, levels, &buffer);
+            status = codec_scan_encode_plane(plane, width, height, levels, &buffer);
 
         if (status != DIC_STATUS_OK)
         {
-            dic_scan_symbol_buffer_free(&buffer);
+            codec_scan_symbol_buffer_free(&buffer);
             free(plane);
-            dic_basic_encoded_free(encoded);
+            codec_basic_encoded_free(encoded);
             return status;
         }
 
@@ -220,8 +220,8 @@ dic_status dic_basic_encode_image(
     return DIC_STATUS_OK;
 }
 
-dic_status dic_basic_decode_image(
-    const dic_basic_encoded_image *encoded,
+dic_status codec_basic_decode_image(
+    const codec_basic_encoded_image *encoded,
     dic_image_u8 *decoded
 )
 {
@@ -234,7 +234,7 @@ dic_status dic_basic_decode_image(
     if (encoded == NULL || decoded == NULL || encoded->channel_streams == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    status = dic_basic_validate_params(
+    status = codec_basic_validate_params(
         encoded->width,
         encoded->height,
         encoded->channels,
@@ -256,7 +256,7 @@ dic_status dic_basic_decode_image(
         return status;
     }
 
-    status = dic_subband_lowest_ll_rect(
+    status = codec_subband_lowest_ll_rect(
         encoded->width,
         encoded->height,
         encoded->levels,
@@ -271,9 +271,9 @@ dic_status dic_basic_decode_image(
 
     for (channel = 0; channel < encoded->channels; ++channel)
     {
-        const dic_basic_channel_stream *stream = encoded->channel_streams + channel;
+        const codec_basic_channel_stream *stream = encoded->channel_streams + channel;
 
-        status = dic_scan_decode_plane(
+        status = codec_scan_decode_plane(
             stream->symbols,
             stream->symbol_count,
             encoded->width,
@@ -282,9 +282,9 @@ dic_status dic_basic_decode_image(
             plane
         );
         if (status == DIC_STATUS_OK)
-            status = dic_unpredict_ll_left(plane, encoded->width, ll_rect);
+            status = codec_unpredict_ll_left(plane, encoded->width, ll_rect);
         if (status == DIC_STATUS_OK)
-            status = dic_dequant_scalar_i32(plane, plane_count, encoded->quant_step);
+            status = codec_dequant_scalar_i32(plane, plane_count, encoded->quant_step);
         if (status == DIC_STATUS_OK)
             status = dic_dwt53_inverse_plane(plane, encoded->width, encoded->height, encoded->levels);
 
@@ -295,7 +295,7 @@ dic_status dic_basic_decode_image(
             return status;
         }
 
-        dic_basic_copy_plane_to_channel(
+        codec_basic_copy_plane_to_channel(
             plane,
             encoded->width,
             encoded->height,
@@ -309,7 +309,7 @@ dic_status dic_basic_decode_image(
     return DIC_STATUS_OK;
 }
 
-size_t dic_basic_symbol_count(const dic_basic_encoded_image *encoded)
+size_t codec_basic_symbol_count(const codec_basic_encoded_image *encoded)
 {
     size_t total = 0u;
     int channel;

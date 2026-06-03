@@ -1,13 +1,13 @@
 /**
- * @file dic_quant.c
+ * @file quant.c
  * @brief Implements scalar quantization and dequantization for codec coefficients.
  */
 
-#include "codec/dic_quant.h"
+#include "codec/quant.h"
 
 #include <stddef.h>
 
-static int32_t dic_quant_round_div(int32_t value, int step_size)
+static int32_t codec_quant_round_div(int32_t value, int step_size)
 {
     int32_t step = (int32_t)step_size;
 
@@ -18,7 +18,7 @@ static int32_t dic_quant_round_div(int32_t value, int step_size)
     return -(((-value) + (step / 2)) / step);
 }
 
-dic_status dic_quant_scalar_i32(int32_t *values, size_t count, int step_size)
+dic_status codec_quant_scalar_i32(int32_t *values, size_t count, int step_size)
 {
     size_t i;
 
@@ -26,12 +26,12 @@ dic_status dic_quant_scalar_i32(int32_t *values, size_t count, int step_size)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     for (i = 0; i < count; ++i)
-        values[i] = dic_quant_round_div(values[i], step_size);
+        values[i] = codec_quant_round_div(values[i], step_size);
 
     return DIC_STATUS_OK;
 }
 
-dic_status dic_dequant_scalar_i32(int32_t *values, size_t count, int step_size)
+dic_status codec_dequant_scalar_i32(int32_t *values, size_t count, int step_size)
 {
     size_t i;
 

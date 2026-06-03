@@ -7,7 +7,7 @@
  * expose the sub-band code-block windows that packet construction uses when a resolution is
  * split into multiple packet positions.
  *
- * References: dic_subband.h for project sub-band rectangles, j2k_packet.c for packet
+ * References: subband.h for project sub-band rectangles, j2k_packet.c for packet
  * ordering users, j2k_image.c for encoder layout, and Annex J examples that show
  * sub-band/code-block decoding steps.
  */
@@ -62,7 +62,7 @@ dic_status j2k_codeblock_grid_for_subband(
     int height,
     int levels,
     int resolution,
-    dic_subband_orientation orientation,
+    codec_subband_orientation orientation,
     int codeblock_width,
     int codeblock_height,
     j2k_codeblock_grid *grid
@@ -82,7 +82,7 @@ dic_status j2k_codeblock_grid_for_subband(
         return DIC_STATUS_INVALID_ARGUMENT;
 
     level = resolution == 0 ? levels : (levels - resolution + 1);
-    status = dic_subband_rect(width, height, levels, level, orientation, &grid->subband);
+    status = codec_subband_rect(width, height, levels, level, orientation, &grid->subband);
     if (status != DIC_STATUS_OK)
         return status;
 

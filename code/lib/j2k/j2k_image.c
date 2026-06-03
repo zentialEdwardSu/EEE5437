@@ -21,7 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "codec/dic_subband.h"
+#include "codec/subband.h"
 #include "j2k/j2k_codestream.h"
 #include "j2k/j2k_ict.h"
 #include "j2k/j2k_packet.h"
@@ -59,6 +59,14 @@ typedef struct j2k_image_tile_payloads
     size_t count;
 } j2k_image_tile_payloads;
 
+/**
+ * @brief Initialize a j2k_image_payload to empty state.
+ *
+ * Sets all fields to zero/NULL. Must be called before first use when
+ * allocated on the stack. The buffer is lazily allocated on first append.
+ *
+ * @param payload  Payload structure to initialize (non-NULL).
+ */
 static void j2k_image_payload_init(j2k_image_payload *payload)
 {
     j2k_DEBUG_ENTER();
@@ -67,6 +75,14 @@ static void j2k_image_payload_init(j2k_image_payload *payload)
     payload->capacity = 0u;
 }
 
+/**
+ * @brief Free the buffer within a j2k_image_payload and reinitialize.
+ *
+ * Calls free() on the internal data pointer (safe for NULL), then resets
+ * the structure via j2k_image_payload_init().
+ *
+ * @param payload  Payload structure to free (non-NULL).
+ */
 static void j2k_image_payload_free(j2k_image_payload *payload)
 {
     j2k_DEBUG_ENTER();
@@ -74,6 +90,14 @@ static void j2k_image_payload_free(j2k_image_payload *payload)
     j2k_image_payload_init(payload);
 }
 
+/**
+ * @brief Initialize a j2k_image_stream_list to empty state.
+ *
+ * Sets streams pointer to NULL, count and capacity to zero. The list is
+ * populated by j2k_image_stream_list_push_empty() during sub-band partitioning.
+ *
+ * @param list  Stream list structure to initialize (non-NULL).
+ */
 static void j2k_image_stream_list_init(j2k_image_stream_list *list)
 {
     j2k_DEBUG_ENTER();
@@ -82,6 +106,15 @@ static void j2k_image_stream_list_init(j2k_image_stream_list *list)
     list->capacity = 0u;
 }
 
+/**
+ * @brief Free all code-block streams in a list and reset the structure.
+ *
+ * Iterates through all capacity entries (all of which were initialized by
+ * j2k_image_stream_list_push_empty), freeing each via j2k_codeblock_stream_free(),
+ * then frees the array and re-initializes.
+ *
+ * @param list  Stream list to free (non-NULL).
+ */
 static void j2k_image_stream_list_free(j2k_image_stream_list *list)
 {
     j2k_DEBUG_ENTER();
@@ -94,6 +127,14 @@ static void j2k_image_stream_list_free(j2k_image_stream_list *list)
     j2k_image_stream_list_init(list);
 }
 
+/**
+ * @brief Initialize a j2k_image_tile_payloads to empty state.
+ *
+ * Sets both tile_parts and payloads arrays to NULL and count to zero.
+ * Used for stack-allocated structures before population by j2k_image_alloc_tile_payloads().
+ *
+ * @param tile_payloads  Structure to initialize (non-NULL).
+ */
 static void j2k_image_tile_payloads_init(j2k_image_tile_payloads *tile_payloads)
 {
     j2k_DEBUG_ENTER();
@@ -102,6 +143,14 @@ static void j2k_image_tile_payloads_init(j2k_image_tile_payloads *tile_payloads)
     tile_payloads->count = 0u;
 }
 
+/**
+ * @brief Free all resources in a j2k_image_tile_payloads and reset.
+ *
+ * Frees each individual payload buffer, then the payloads and tile_parts
+ * arrays, and re-initializes. Safe to call on NULL (early return).
+ *
+ * @param tile_payloads  Structure to free (may be NULL).
+ */
 static void j2k_image_tile_payloads_free(j2k_image_tile_payloads *tile_payloads)
 {
     j2k_DEBUG_ENTER();
@@ -116,6 +165,19 @@ static void j2k_image_tile_payloads_free(j2k_image_tile_payloads *tile_payloads)
     j2k_image_tile_payloads_init(tile_payloads);
 }
 
+/**
+ * @brief Append raw bytes to a j2k_image_payload, growing the buffer as needed.
+ *
+ * Implements a doubling-capacity dynamic array with initial capacity of 256
+ * bytes (chosen to avoid frequent reallocations for typical small payloads).
+ * Includes overflow detection for size_t arithmetic. Zero-size appends are
+ * no-ops returning success immediately.
+ *
+ * @param payload  Target payload buffer (non-NULL).
+ * @param data     Source bytes to copy (may be NULL only if size == 0).
+ * @param size     Number of bytes to append.
+ * @return DIC_STATUS_OK, DIC_STATUS_MEMORY_ERROR, or DIC_STATUS_INVALID_ARGUMENT.
+ */
 static dic_status j2k_image_payload_append(
     j2k_image_payload *payload,
     const uint8_t *data,
@@ -128,13 +190,16 @@ static dic_status j2k_image_payload_append(
 
     if (size == 0u)
         return DIC_STATUS_OK;
+    /** Overflow guard: ensure size + payload->size doesn't wrap. */
     if (data == NULL || size > (size_t)-1 - payload->size)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (payload->size + size > payload->capacity)
     {
+        /** Grow using doubling strategy from initial 256 bytes. */
         new_capacity = payload->capacity == 0u ? 256u : payload->capacity;
         while (new_capacity < payload->size + size)
         {
+            /** Guard against overflow when capacity doubles. */
             if (new_capacity > (size_t)-1 / 2u)
                 return DIC_STATUS_INVALID_ARGUMENT;
             new_capacity *= 2u;
@@ -152,6 +217,19 @@ static dic_status j2k_image_payload_append(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex A marker fields are emitted most-significant byte first. */
+
+/**
+ * @brief Append a 16-bit unsigned integer in big-endian (network) byte order.
+ *
+ * Per Annex A, all multi-byte marker segment fields use MSB-first encoding.
+ * Splits the value by masking and shifting (host-endianness-independent),
+ * then appends the two bytes via j2k_image_payload_append. Used for SIZ
+ * dimensions, QCD step sizes, SOP/EPH lengths, and other 16-bit fields.
+ *
+ * @param payload  Target payload buffer.
+ * @param value    16-bit value in host byte order.
+ * @return DIC_STATUS_OK or error from j2k_image_payload_append.
+ */
 static dic_status j2k_image_payload_append_u16_be(
     j2k_image_payload *payload,
     uint16_t value
@@ -204,6 +282,17 @@ static dic_status j2k_image_payload_append_packet(
     return status;
 }
 
+/**
+ * @brief Allocate and push an empty j2k_codeblock_stream onto a stream list.
+ *
+ * Grows the list (doubling from initial capacity 8) and initializes new
+ * entries via j2k_codeblock_stream_init(). Returns a pointer to the new
+ * empty stream for the caller to populate with EBCOT coding data.
+ *
+ * @param list    Target stream list (non-NULL).
+ * @param stream  [out] Pointer to the newly added stream entry (non-NULL).
+ * @return DIC_STATUS_OK, DIC_STATUS_MEMORY_ERROR, or DIC_STATUS_INVALID_ARGUMENT.
+ */
 static dic_status j2k_image_stream_list_push_empty(
     j2k_image_stream_list *list,
     j2k_codeblock_stream **stream
@@ -238,6 +327,18 @@ static dic_status j2k_image_stream_list_push_empty(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex G.1 Figures G.1-G.2, unsigned 8-bit tile-components are DC level shifted before DWT. */
+
+/**
+ * @brief DC level shift an unsigned 8-bit sample per Annex G.1/G.2.
+ *
+ * Per Equations G-1 and G-2: I'(x,y) = I(x,y) - 2^{P-1}.
+ * For 8-bit data (P=8, SSiz=7 in SIZ): shift = -128.
+ * This centers the unsigned [0,255] range to signed [-128,127],
+ * reducing the DC component before DWT and component transform.
+ *
+ * @param sample  Unsigned 8-bit pixel value [0, 255].
+ * @return Signed 32-bit value [-128, 127].
+ */
 static int32_t j2k_image_level_shift(uint8_t sample)
 {
     j2k_DEBUG_ENTER();
@@ -245,6 +346,20 @@ static int32_t j2k_image_level_shift(uint8_t sample)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex F.4, FDWT is iterated over the LL region only; tiny images therefore use fewer levels. */
+
+/**
+ * @brief Determine actual DWT decomposition levels for a given image size.
+ *
+ * Per Annex F.4, the forward DWT is iterated over LL only. Each level halves
+ * LL dimensions: L = ceil(L_prev / 2). If either dimension would drop below 2,
+ * further levels are not applied. This function simulates the LL size reduction
+ * sequence to find the maximum usable level count.
+ *
+ * @param width             Image width in samples.
+ * @param height            Image height in samples.
+ * @param requested_levels  Desired number of levels.
+ * @return Actual effective levels (0 <= result <= requested_levels).
+ */
 static int j2k_image_effective_levels(int width, int height, int requested_levels)
 {
     j2k_DEBUG_ENTER();
@@ -261,6 +376,20 @@ static int j2k_image_effective_levels(int width, int height, int requested_level
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex G.1-G.2, unsigned samples are level shifted and RGB input uses the reversible component transform when COD MCT is set. */
+
+/**
+ * @brief Convert unsigned 8-bit image to signed int32 planar format with optional RCT.
+ *
+ * Pipeline: (1) DC level shift each sample by -128 (Annex G.1/G.2),
+ * (2) if 3-component, apply forward RCT (Annex G.2, Eqs G-4 to G-8):
+ *     Y0 = floor((R + 2G + B)/4), Y1 = B - G, Y2 = R - G,
+ * (3) de-interleave from pixel-major to planar layout.
+ * The planar format enables independent DWT processing per component.
+ *
+ * @param image       Input image (unsigned 8-bit, 1 or 3 channels).
+ * @param planes_out  [out] Allocated int32 array; caller must free().
+ * @return DIC_STATUS_OK, DIC_STATUS_MEMORY_ERROR, or DIC_STATUS_INVALID_ARGUMENT.
+ */
 static dic_status j2k_image_make_planes(
     const dic_image_u8 *image,
     int32_t **planes_out
@@ -329,6 +458,19 @@ static dic_status j2k_image_make_planes(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex G.1-G.2, irreversible coding uses the ICT after unsigned sample level shifting. */
+
+/**
+ * @brief Convert unsigned 8-bit image to double planar format with optional ICT.
+ *
+ * Same pipeline as j2k_image_make_planes() but uses double precision and the
+ * Irreversible Component Transform (Annex G.1, Eqs G-1 to G-3) instead of RCT.
+ * ICT is: Y0=0.299R+0.587G+0.114B, Y1=-0.16875R-0.33126G+0.5B,
+ * Y2=0.5R-0.41869G-0.08131B. Not perfectly reversible; used with 9-7 DWT.
+ *
+ * @param image       Input image (unsigned 8-bit, 1 or 3 channels).
+ * @param planes_out  [out] Allocated double array; caller must free().
+ * @return DIC_STATUS_OK, DIC_STATUS_MEMORY_ERROR, or DIC_STATUS_INVALID_ARGUMENT.
+ */
 static dic_status j2k_image_make_double_planes(
     const dic_image_u8 *image,
     double **planes_out
@@ -393,7 +535,15 @@ static dic_status j2k_image_make_double_planes(
     return DIC_STATUS_OK;
 }
 
-static j2k_subband_orientation j2k_image_orientation(dic_subband_orientation orientation)
+/**
+ * @brief Map generic sub-band orientation to j2k-specific enum.
+ *
+ * DIC_SUBBAND_HL -> j2k_SUBBAND_HL, DIC_SUBBAND_HH -> j2k_SUBBAND_HH,
+ * DIC_SUBBAND_LH/LL -> j2k_SUBBAND_LL_LH. The LL and LH sub-bands share
+ * the same EBCOT context label orientation (D.3.2) because both use the
+ * LL+LH context model, distinct from HL and HH.
+ */
+static j2k_subband_orientation j2k_image_orientation(codec_subband_orientation orientation)
 {
     j2k_DEBUG_ENTER();
     if (orientation == DIC_SUBBAND_HL)
@@ -404,6 +554,14 @@ static j2k_subband_orientation j2k_image_orientation(dic_subband_orientation ori
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.6.1 Table A.21, 15/15 is the explicit maximum precinct size. */
+
+/**
+ * @brief Set maximum precinct size (2^15 x 2^15) for all resolution levels.
+ *
+ * Per Table A.21, PPx/PPy=15 is the maximum, collapsing each resolution to a
+ * single precinct. This simplifies packet layouts: exactly 1 packet per
+ * (layer, resolution, component) in LRCP order per Annex B.10.
+ */
 static void j2k_image_set_max_precincts(j2k_basic_params *params)
 {
     j2k_DEBUG_ENTER();
@@ -418,6 +576,24 @@ static void j2k_image_set_max_precincts(j2k_basic_params *params)
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.7, sub-bands are partitioned into rectangular code-blocks anchored on the code-block grid. */
+
+/**
+ * @brief Partition a sub-band into 64x64 code-blocks and EBCOT-encode each.
+ *
+ * Per Annex B.7, sub-bands are divided into regular code-block grids. Edge
+ * blocks may be smaller. Each block is extracted from the coefficient plane,
+ * EBCOT-encoded (Annex D.2-D.5: Cleanup/SigProp/MagRef passes, MQ codewords
+ * per Annex C), and its zero_bitplanes are computed as nominal_bitplanes minus
+ * the actual magnitude bit-planes per Annex B.10.5.
+ *
+ * @param plane              DWT coefficient plane (int32).
+ * @param plane_width        Stride in samples.
+ * @param rect               Sub-band rectangle.
+ * @param orientation        Sub-band orientation (LL/LH, HL, HH).
+ * @param nominal_bitplanes  Sub-band nominal bit-depth from QCD/QCC.
+ * @param streams            [out] Stream list to append code-block streams to.
+ * @return DIC_STATUS_OK or error from encoding.
+ */
 static dic_status j2k_image_append_subband_streams(
     const int32_t *plane,
     int plane_width,
@@ -494,6 +670,29 @@ static dic_status j2k_image_append_subband_streams(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.8, one packet of a resolution/component contains LL or the ordered HL, LH, HH sub-band contributions. */
+
+/**
+ * @brief Build one LRCP packet for (resolution, component) at a given layer.
+ *
+ * Per Annex B.10.8: resolution 0 contains LL sub-band only; resolution r>0
+ * contains HL, LH, HH sub-bands at DWT level = N_L - r + 1. Each sub-band is
+ * partitioned into code-blocks via j2k_image_append_subband_streams(), then
+ * a packet is assembled by j2k_packet_build_tagged_ebcot_layer_payload_with_header_size()
+ * (inclusion tag trees per B.10.4, zero-bit-plane tag trees per B.10.5,
+ * coding pass counts per B.10.6, length segments per B.10.7), and wrapped
+ * with SOP/EPH markers per Annex A.8.
+ *
+ * @param plane                 Coefficient plane.
+ * @param width / height        Plane dimensions.
+ * @param levels                DWT decomposition levels.
+ * @param resolution            Resolution index (0=LL, >0=HL+LH+HH).
+ * @param component / roi extra bits  Extra bit-planes.
+ * @param nominal_bitplanes     Per-sub-band bit-planes or NULL for defaults.
+ * @param layer_index / layers  Layer context for tag-tree thresholds.
+ * @param packet_sequence       Sequential N_SOP for SOP marker.
+ * @param payload               Output buffer.
+ * @return DIC_STATUS_OK or error.
+ */
 static dic_status j2k_image_append_resolution_packet(
     int32_t *plane,
     int width,
@@ -538,7 +737,7 @@ static dic_status j2k_image_append_resolution_packet(
         }
         else
         {
-            status = dic_subband_lowest_ll_rect(width, height, levels, &rect);
+            status = codec_subband_lowest_ll_rect(width, height, levels, &rect);
         }
         if (status == DIC_STATUS_OK)
         {
@@ -562,7 +761,7 @@ static dic_status j2k_image_append_resolution_packet(
     }
     else
     {
-        static const dic_subband_orientation orientations[] = {
+        static const codec_subband_orientation orientations[] = {
             DIC_SUBBAND_HL,
             DIC_SUBBAND_LH,
             DIC_SUBBAND_HH
@@ -574,7 +773,7 @@ static dic_status j2k_image_append_resolution_packet(
         {
             dic_rect_i32 rect;
 
-            status = dic_subband_rect(width, height, levels, level, orientations[index], &rect);
+            status = codec_subband_rect(width, height, levels, level, orientations[index], &rect);
             if (status != DIC_STATUS_OK)
                 break;
             status = j2k_image_append_subband_streams(
@@ -618,6 +817,15 @@ static dic_status j2k_image_append_resolution_packet(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.8, LRCP packet order visits layers, resolution levels, components, then precinct data. */
+
+/**
+ * @brief Build complete codestream payload in LRCP progression order.
+ *
+ * Per Annex B.10.8, LRCP order is: for layer l=0..L-1: for resolution r=0..N_L:
+ * for component c=0..C-1: emit packet. Chroma channels get 1 extra bit-plane
+ * when MCT is active (the RCT/ICT expands chroma dynamic range by 1 bit).
+ * Each packet is assembled by j2k_image_append_resolution_packet().
+ */
 static dic_status j2k_image_build_payload(
     int32_t *planes,
     int width,
@@ -673,6 +881,13 @@ static dic_status j2k_image_build_payload(
     return status;
 }
 
+/**
+ * @brief Scalar dead-zone quantize a rectangular region of DWT coefficients.
+ *
+ * Per Annex E.1.1 Eq E-1: q = sign(y) * floor(|y| / delta_b).
+ * Iterates over each coefficient in the rectangle, quantizing via
+ * j2k_quantize_coefficient(). Source is double (post 9-7 DWT), target is int32.
+ */
 static dic_status j2k_image_quantize_rect(
     const double *source,
     int32_t *target,
@@ -703,6 +918,15 @@ static dic_status j2k_image_quantize_rect(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex E, irreversible coefficient quantization is sub-band scalar quantization before EBCOT. */
+
+/**
+ * @brief Quantize all DWT sub-band coefficients for all components.
+ *
+ * Iterates over all sub-bands (LL, then HL/LH/HH at each resolution level),
+ * applying scalar quantization with per-sub-band step sizes. Step array order
+ * matches QCD marker segment: steps[0]=LL, then HL/LH/HH at each level.
+ * Uses codec_subband_rect() to determine sub-band geometry (Annex B.2-B.7).
+ */
 static dic_status j2k_image_quantize_planes(
     const double *source,
     int32_t *target,
@@ -726,7 +950,7 @@ static dic_status j2k_image_quantize_planes(
 
         status = levels == 0
             ? DIC_STATUS_OK
-            : dic_subband_lowest_ll_rect(width, height, levels, &rect);
+            : codec_subband_lowest_ll_rect(width, height, levels, &rect);
         if (levels == 0)
         {
             rect.x = 0;
@@ -738,7 +962,7 @@ static dic_status j2k_image_quantize_planes(
             status = j2k_image_quantize_rect(source_plane, target_plane, width, &rect, steps[0]);
         for (resolution = 1; status == DIC_STATUS_OK && resolution <= levels; ++resolution)
         {
-            static const dic_subband_orientation orientations[] = {
+            static const codec_subband_orientation orientations[] = {
                 DIC_SUBBAND_HL,
                 DIC_SUBBAND_LH,
                 DIC_SUBBAND_HH
@@ -748,7 +972,7 @@ static dic_status j2k_image_quantize_planes(
 
             for (index = 0; status == DIC_STATUS_OK && index < 3; ++index)
             {
-                status = dic_subband_rect(width, height, levels, level, orientations[index], &rect);
+                status = codec_subband_rect(width, height, levels, level, orientations[index], &rect);
                 if (status == DIC_STATUS_OK)
                 {
                     status = j2k_image_quantize_rect(
@@ -767,6 +991,13 @@ static dic_status j2k_image_quantize_planes(
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Determine mantissa bits (epsilon_b) for irreversible SPqcd encoding.
+ *
+ * Per Annex A.6.4 Tables A.27-A.28 and Annex E.1.2: LL uses 8 mantissa bits,
+ * HL/LH use 9, HH uses 10. HH sub-bands identified by (step_index-1)%3 == 2
+ * because QCD sub-band order within a level is HL(0), LH(1), HH(2).
+ */
 static unsigned int j2k_image_irreversible_qcd_range_bits(unsigned int step_index)
 {
     if (step_index == 0u)
@@ -774,6 +1005,13 @@ static unsigned int j2k_image_irreversible_qcd_range_bits(unsigned int step_inde
     return ((step_index - 1u) % 3u) == 2u ? 10u : 9u;
 }
 
+/**
+ * @brief Compute nominal bit-planes for lossy sub-band from step size.
+ *
+ * Encodes step_size as SPqcd (Annex A.6.4), extracts the 5-bit exponent
+ * (bits 15..11), and adds guard_bits-1 to account for 9-7 DWT coefficient
+ * expansion per Annex E.1.1 Equation E-1.
+ */
 static uint32_t j2k_image_lossy_nominal_bitplanes(
     double step_size,
     unsigned int step_index,
@@ -796,6 +1034,17 @@ static uint32_t j2k_image_lossy_nominal_bitplanes(
     return guard_bits > 0u ? exponent + (uint32_t)guard_bits - 1u : exponent;
 }
 
+/**
+ * @brief Encode image via irreversible path: 9-7 DWT + scalar quantization + EBCOT.
+ *
+ * Pipeline: (1) quality-based base step size, (2) effective DWT levels,
+ * (3) level shift + optional ICT to double planes, (4) forward 9-7 DWT
+ * (Annex F.4, Equations F-11/F-12), (5) compute per-sub-band nominal bit-planes
+ * from quantization step sizes, (6) scalar quantization (Annex E.1.1),
+ * (7) EBCOT encode + LRCP packet build, (8) set codestream params.
+ * Guard bits (j2k_IMAGE_LOSSY_GUARD_BITS = 7) protect against 9-7 coefficient
+ * expansion.
+ */
 static dic_status j2k_image_encode_lossy_payload(
     const dic_image_u8 *image,
     int requested_levels,
@@ -904,6 +1153,14 @@ static dic_status j2k_image_encode_lossy_payload(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.5.1 and Annex B.5, tile-components are coded independently in tile grid order. */
+
+/**
+ * @brief Extract a rectangular tile region from the source image.
+ *
+ * Per Annex B.5, tiles are independently coded spatial regions. Copies pixel
+ * data row-by-row via memcpy, preserving channel interleaving.
+ * Bounds-checked: tile must fit entirely within the source image.
+ */
 static dic_status j2k_image_copy_tile(
     const dic_image_u8 *image,
     int tile_x,
@@ -938,6 +1195,13 @@ static dic_status j2k_image_copy_tile(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.5.1, every tile in the grid contributes at least one tile-part. */
+
+/**
+ * @brief Allocate one tile-part payload per tile in the grid.
+ *
+ * Creates j2k_tile_part_payload (SOT metadata) and j2k_image_payload (data
+ * buffer) per tile. tile_count must not exceed UINT16_MAX+1 (SOT/Isot is 16-bit).
+ */
 static dic_status j2k_image_alloc_tile_payloads(
     size_t tile_count,
     j2k_image_tile_payloads *tile_payloads
@@ -965,6 +1229,16 @@ static dic_status j2k_image_alloc_tile_payloads(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex F.4 and Annex B.10, transformed tile-components are entropy coded into packetized code-block contributions. */
+
+/**
+ * @brief Central encoding dispatch: lossless (5-3 DWT + RCT) or lossy (9-7 DWT + ICT).
+ *
+ * Lossless path (quality == -1): level shift, RCT, 5-3 DWT (Annex F.3), optional
+ * ROI Maxshift (Annex H.2), EBCOT + LRCP packet build.
+ * Lossy path (quality >= 0): delegates to j2k_image_encode_lossy_payload().
+ * Sets codestream parameters (SIZ/COD/QCD fields). ROI and lossy are mutually
+ * exclusive in this encoder.
+ */
 static dic_status j2k_image_encode_payload(
     const dic_image_u8 *image,
     int requested_levels,
@@ -1069,6 +1343,13 @@ static dic_status j2k_image_encode_payload(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.5.1, main-header SIZ describes the full reference grid and regular tile size. */
+
+/**
+ * @brief Set main-header parameters for tiled encoding.
+ *
+ * Sets Xsiz/Ysiz, tile dimensions (XTsiz=0 means single tile), component count,
+ * decomposition levels, reversible=1, MCT flag, SOP/EPH enabled, and max precincts.
+ */
 static void j2k_image_set_main_params(
     const dic_image_u8 *image,
     int levels,
@@ -1095,6 +1376,16 @@ static void j2k_image_set_main_params(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.5-B.10, each tile is transformed and packetized independently. */
+
+/**
+ * @brief Encode all tiles in a tiled image.
+ *
+ * Per Annex B.5: tiles are independently encoded. Computes tile grid
+ * (ceil division), finds minimum effective DWT levels across all tiles,
+ * then extracts and encodes each tile via j2k_image_encode_payload().
+ * Edge tiles may be smaller than the regular tile size. Sets main-header
+ * params from the full reference grid geometry.
+ */
 static dic_status j2k_image_encode_tile_parts(
     const dic_image_u8 *image,
     int requested_levels,
@@ -1197,7 +1488,15 @@ static dic_status j2k_image_encode_tile_parts(
     return status;
 }
 
-/* Reference: paper/T-REC-T.800-200208.pdf, Annex A.3-A.4, a raw codestream is main header, one tile-part SOD payload, and EOC. */
+/* Reference: paper/T-REC-T.800-200208.pdf, A.3-A.4, a raw codestream is main header, one tile-part SOD payload, and EOC. */
+
+/**
+ * @brief Write a raw JPEG 2000 codestream (.j2k) for a single-tile image.
+ *
+ * Single-tile encoding (one layer): level shift, RCT/ICT, DWT (5-3 or 9-7),
+ * EBCOT coding, LRCP packet assembly, then codestream output per Annex A.3-A.4.
+ * quality==-1 selects lossless (5-3 DWT), else lossy (9-7 DWT + quantization).
+ */
 dic_status j2k_write_image_codestream(
     const char *path,
     const dic_image_u8 *image,
@@ -1223,6 +1522,15 @@ dic_status j2k_write_image_codestream(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex H.2-H.3, ROI Maxshift applies a wavelet-domain coefficient mask before EBCOT coding. */
+
+/**
+ * @brief Write a codestream with Maxshift ROI coding per Annex H.2.
+ *
+ * ROI coefficients are scaled up by 2^roi_shift before EBCOT, so they occupy
+ * higher bit-planes and decode first in quality-progressive order. Uses the
+ * lossless reversible path (5-3 DWT, RCT). The RGN marker in the main header
+ * signals the ROI shift to the decoder per Annex A.6.3.
+ */
 dic_status j2k_write_image_codestream_roi(
     const char *path,
     const dic_image_u8 *image,
@@ -1249,6 +1557,14 @@ dic_status j2k_write_image_codestream_roi(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, A.3-A.5, a tiled codestream writes one SOT/SOD tile-part per tile. */
+
+/**
+ * @brief Write a tiled raw codestream (.j2k) with one tile-part per tile.
+ *
+ * Encodes each tile independently via j2k_image_encode_tile_parts(),
+ * then writes the multi-tile codestream via j2k_write_codestream_with_tile_parts().
+ * Main header describes reference grid and regular tile size (Annex A.5.1).
+ */
 dic_status j2k_write_image_codestream_tiled(
     const char *path,
     const dic_image_u8 *image,
@@ -1291,6 +1607,14 @@ dic_status j2k_write_image_codestream_tiled(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1, JP2 stores the same codestream in a Contiguous Codestream box. */
+
+/**
+ * @brief Write a JP2 file (.jp2) for a single-tile image per Annex I.
+ *
+ * Encodes the codestream payload and wraps it in JP2 boxes (jP signature,
+ * ftyp, jp2h header, jp2c Contiguous Codestream) via jp2_write_file_with_codestream_payload().
+ * The codestream inside jp2c is identical to a raw .j2k file.
+ */
 dic_status j2k_write_image_jp2(
     const char *path,
     const dic_image_u8 *image,
@@ -1316,6 +1640,13 @@ dic_status j2k_write_image_jp2(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1 and Annex H, JP2 wraps the ROI-shifted codestream and RGN marker. */
+
+/**
+ * @brief Write a JP2 file with Maxshift ROI coding per Annex I + Annex H.
+ *
+ * Combines JP2 file wrapping with ROI Maxshift. The RGN marker in the
+ * codestream main header signals the ROI shift to the decoder.
+ */
 dic_status j2k_write_image_jp2_roi(
     const char *path,
     const dic_image_u8 *image,
@@ -1342,6 +1673,15 @@ dic_status j2k_write_image_jp2_roi(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex I.5.2.1, JP2 stores the complete multi-tile codestream in one jp2c box. */
+
+/**
+ * @brief Write a JP2 file containing a tiled codestream.
+ *
+ * The complete multi-tile codestream (all SOT/SOD tile-parts) is placed in
+ * a single Contiguous Codestream box (jp2c). The JP2 format is identical
+ * for single-tile and multi-tile codestreams; only the codestream inside
+ * the jp2c box differs.
+ */
 dic_status j2k_write_image_jp2_tiled(
     const char *path,
     const dic_image_u8 *image,

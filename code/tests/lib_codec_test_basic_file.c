@@ -1,7 +1,7 @@
 #include <stdio.h>
 
-#include "codec/dic_basic_file.h"
-#include "codec/dic_metrics.h"
+#include "codec/basic_file.h"
+#include "codec/metrics.h"
 #include "test_helpers.h"
 
 static long dic_test_file_size(const char *path)
@@ -24,10 +24,10 @@ static long dic_test_file_size(const char *path)
 
 int main(void)
 {
-    const char *path = "dic_basic_test.dicw";
+    const char *path = "codec_basic_test.dicw";
     uint8_t source[16 * 16 * 3];
-    dic_basic_encoded_image encoded = {0};
-    dic_basic_encoded_image read_back = {0};
+    codec_basic_encoded_image encoded = {0};
+    codec_basic_encoded_image read_back = {0};
     dic_image_u8 decoded = {0};
     double psnr;
     long file_size;
@@ -47,26 +47,26 @@ int main(void)
         }
     }
 
-    DIC_EXPECT(dic_basic_encode_image(source, 16, 16, 3, 3, 4, &encoded) == DIC_STATUS_OK);
-    DIC_EXPECT(dic_basic_write_file(path, &encoded) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_encode_image(source, 16, 16, 3, 3, 4, &encoded) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_write_file(path, &encoded) == DIC_STATUS_OK);
     file_size = dic_test_file_size(path);
     DIC_EXPECT(file_size > 0);
 
-    DIC_EXPECT(dic_basic_read_file(path, &read_back) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_read_file(path, &read_back) == DIC_STATUS_OK);
     DIC_EXPECT(read_back.width == encoded.width);
     DIC_EXPECT(read_back.height == encoded.height);
     DIC_EXPECT(read_back.channels == encoded.channels);
     DIC_EXPECT(read_back.levels == encoded.levels);
     DIC_EXPECT(read_back.quant_step == encoded.quant_step);
-    DIC_EXPECT(dic_basic_symbol_count(&read_back) == dic_basic_symbol_count(&encoded));
+    DIC_EXPECT(codec_basic_symbol_count(&read_back) == codec_basic_symbol_count(&encoded));
 
-    DIC_EXPECT(dic_basic_decode_image(&read_back, &decoded) == DIC_STATUS_OK);
-    psnr = dic_metric_psnr_u8(source, decoded.data, sizeof(source));
+    DIC_EXPECT(codec_basic_decode_image(&read_back, &decoded) == DIC_STATUS_OK);
+    psnr = codec_metric_psnr_u8(source, decoded.data, sizeof(source));
     DIC_EXPECT(psnr > 24.0);
 
     dic_image_u8_free(&decoded);
-    dic_basic_encoded_free(&read_back);
-    dic_basic_encoded_free(&encoded);
+    codec_basic_encoded_free(&read_back);
+    codec_basic_encoded_free(&encoded);
     remove(path);
     return 0;
 }

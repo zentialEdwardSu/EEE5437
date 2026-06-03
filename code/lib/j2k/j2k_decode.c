@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "codec/dic_subband.h"
+#include "codec/subband.h"
 #include "j2k/j2k_codestream.h"
 #include "j2k/j2k_ebcot.h"
 #include "j2k/j2k_ict.h"
@@ -131,6 +131,11 @@ typedef struct j2k_decode_contribution_list
     size_t capacity;
 } j2k_decode_contribution_list;
 
+/**
+ * @brief Free the internal buffer of a j2k_decode_buffer.
+ *
+ * Safe for NULL (early return). After freeing, data is set to NULL and size to 0.
+ */
 static void j2k_decode_buffer_free(j2k_decode_buffer *buffer)
 {
     j2k_DEBUG_ENTER();
@@ -141,6 +146,17 @@ static void j2k_decode_buffer_free(j2k_decode_buffer *buffer)
     buffer->size = 0u;
 }
 
+/**
+ * @brief Read an entire file into memory for codestream parsing.
+ *
+ * Opens the file in binary mode, determines file size via fseek/ftell,
+ * allocates a buffer (minimum 1 byte even for empty files), and reads
+ * the entire contents. Used for both raw .j2k and .jp2 files.
+ *
+ * @param path    File path (non-NULL).
+ * @param buffer  [out] Buffer with .data and .size populated.
+ * @return DIC_STATUS_OK or error (open, read, memory).
+ */
 static dic_status j2k_decode_read_file(const char *path, j2k_decode_buffer *buffer)
 {
     j2k_DEBUG_ENTER();
@@ -187,6 +203,10 @@ static dic_status j2k_decode_read_file(const char *path, j2k_decode_buffer *buff
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Read one unsigned 8-bit byte from the view, advancing the offset.
+ * @return 1 on success, 0 if past end of data.
+ */
 static int j2k_decode_read_u8(j2k_decode_view *view, uint8_t *value)
 {
     j2k_DEBUG_ENTER();
@@ -196,6 +216,13 @@ static int j2k_decode_read_u8(j2k_decode_view *view, uint8_t *value)
     return 1;
 }
 
+/**
+ * @brief Read a 16-bit unsigned big-endian value from the view.
+ *
+ * Per Annex A, all multi-byte codestream fields are MSB-first.
+ * Reads two bytes, combines: hi<<8 | lo.
+ * @return 1 on success, 0 if past end of data.
+ */
 static int j2k_decode_read_u16_be(j2k_decode_view *view, uint16_t *value)
 {
     j2k_DEBUG_ENTER();
@@ -208,6 +235,13 @@ static int j2k_decode_read_u16_be(j2k_decode_view *view, uint16_t *value)
     return 1;
 }
 
+/**
+ * @brief Read a 32-bit unsigned big-endian value from the view.
+ *
+ * Per Annex A, 32-bit fields (Psot, Xsiz, Ysiz, JP2 box lengths)
+ * are encoded MSB-first in 4 bytes. Reads b0..b3, combines: b0<<24 | b1<<16 | b2<<8 | b3.
+ * @return 1 on success, 0 if past end of data.
+ */
 static int j2k_decode_read_u32_be(j2k_decode_view *view, uint32_t *value)
 {
     j2k_DEBUG_ENTER();
@@ -272,6 +306,15 @@ static void j2k_decode_tile_list_free(j2k_decode_tile_list *list)
     list->capacity = 0u;
 }
 
+/**
+ * @brief Parse the SIZ marker segment per Annex A.5.1 Table A.9.
+ *
+ * Reads Xsiz, Ysiz, XTsiz, YTsiz, Csiz, and per-component SSiz/XRsiz/YRsiz.
+ * Validates that SSiz=7 (8-bit unsigned) and XRsiz=YRsiz=1 (no subsampling).
+ * Tile dimensions equal to reference grid dimensions are normalized to 0.
+ * Minimum length: 41 bytes (38 + 3*1 component). Rejects component counts
+ * other than 1 (grey) or 3 (color).
+ */
 static dic_status j2k_decode_parse_siz(
     j2k_decode_view *view,
     uint16_t length,
@@ -323,6 +366,16 @@ static dic_status j2k_decode_parse_siz(
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Parse the COD marker segment per Annex A.6.1 Tables A.12-A.21.
+ *
+ * Extracts Scod flags (precincts/SOP/EPH), progression order (must be 0=LRCP),
+ * number of layers, MCT flag, decomposition levels, code-block size (must be
+ * exponent=4 => 64x64), code-block style (must be 0x04: bypass+causal+regular
+ * per D.5.2), wavelet transform (0=9-7, 1=5-3). When precincts are enabled,
+ * reads PPx/PPy for each resolution level r=0..N_L (each byte: PPy<<4|PPx),
+ * requiring PPx=PPy=15 (max precinct) per the constrained decoder profile.
+ */
 static dic_status j2k_decode_parse_cod(
     j2k_decode_view *view,
     uint16_t length,
@@ -552,6 +605,18 @@ static void j2k_decode_tagtree_free(j2k_decode_tagtree *tree)
     j2k_decode_tagtree_init(tree);
 }
 
+/**
+ * @brief Allocate and initialize a tag tree for a code-block grid.
+ *
+ * Per Annex B.10.4-B.10.5, tag trees are hierarchical structures where each
+ * level halves the grid dimensions. The total node count is sum of w_i*h_i
+ * across all levels. Nodes store a lower bound (low) and a known flag.
+ *
+ * @param tree    [out] Tag tree to allocate.
+ * @param width   Code-block grid width (blocks_x).
+ * @param height  Code-block grid height (blocks_y).
+ * @return DIC_STATUS_OK, DIC_STATUS_MEMORY_ERROR, or DIC_STATUS_INVALID_ARGUMENT.
+ */
 static dic_status j2k_decode_tagtree_alloc(j2k_decode_tagtree *tree, int width, int height)
 {
     j2k_DEBUG_ENTER();
@@ -614,6 +679,12 @@ static size_t j2k_decode_tagtree_index(
         + (size_t)x;
 }
 
+/**
+ * @brief Initialize a bit reader over a packet data buffer.
+ *
+ * The reader maintains a byte offset and a sub-byte bit offset (0-7),
+ * enabling bit-level reading of packet headers per Annex B.10.
+ */
 static void j2k_decode_bit_reader_init(
     j2k_decode_bit_reader *reader,
     const uint8_t *data,
@@ -627,12 +698,28 @@ static void j2k_decode_bit_reader_init(
     reader->bit_offset = 0u;
 }
 
+/**
+ * @brief Return the number of usable bits in the current byte.
+ *
+ * Per Annex A.3 and Annex B.10.1, the single bit-stuffing rule applies:
+ * if the previous byte was 0xFF, the current byte starts with only 7 bits
+ * (the MSB is a stuffing zero). Otherwise, all 8 bits are valid data bits.
+ * This implements the in-bit-stream marker avoidance mechanism.
+ */
 static unsigned int j2k_decode_reader_bits_in_current(const j2k_decode_bit_reader *reader)
 {
     j2k_DEBUG_ENTER();
+    /** If previous byte was 0xFF, MSB of current byte is a stuffing 0 => 7 data bits. */
     return reader->byte_offset > 0u && reader->data[reader->byte_offset - 1u] == 0xffu ? 7u : 8u;
 }
 
+/**
+ * @brief Read a single bit from the packet bit-stream.
+ *
+ * Extracts the current bit (MSB-first within each byte), advances bit_offset,
+ * and when the byte is exhausted, advances to the next byte. The bits_in_current
+ * check implements the 0xFF bit-stuffing rule per Annex B.10.1.
+ */
 static dic_status j2k_decode_read_packet_bit(
     j2k_decode_bit_reader *reader,
     uint32_t *bit
@@ -656,6 +743,13 @@ static dic_status j2k_decode_read_packet_bit(
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Read multiple bits from the packet bit-stream (MSB first).
+ *
+ * Reads bit_count bits one at a time (max 31), building the result value
+ * by left-shifting and OR-ing each successive bit. Each bit read follows
+ * the 0xFF stuffing rule via j2k_decode_read_packet_bit().
+ */
 static dic_status j2k_decode_read_packet_bits(
     j2k_decode_bit_reader *reader,
     uint32_t bit_count,
@@ -687,6 +781,24 @@ static size_t j2k_decode_reader_aligned_offset(const j2k_decode_bit_reader *read
     return reader->byte_offset + (reader->bit_offset == 0u ? 0u : 1u);
 }
 
+/**
+ * @brief Decode a tag tree leaf node per Annex B.10.4-B.10.5.
+ *
+ * Tag trees encode the minimum threshold at which each code-block first becomes
+ * included (inclusion tag tree) or the number of zero bit-planes (zero tag tree).
+ * The tree is traversed from leaf to root. At each node, if the node's known
+ * lower bound is below the current threshold, zero bits are read until a 1-bit
+ * terminates (known) or the threshold is exceeded (unknown). If unknown at any
+ * level, the function returns early with known=0 and value=threshold+1.
+ *
+ * @param tree      Tag tree structure.
+ * @param x/y       Leaf position (code-block coordinates).
+ * @param threshold Current layer index or candidate value.
+ * @param reader    Bit reader for packet header data.
+ * @param known     [out] 1 if value is known, 0 if still unknown.
+ * @param value     [out] Decoded value (meaningful only if known==1).
+ * @return DIC_STATUS_OK or format error.
+ */
 static dic_status j2k_decode_tagtree_leaf(
     j2k_decode_tagtree *tree,
     int x,
@@ -746,6 +858,14 @@ static dic_status j2k_decode_tagtree_leaf(
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Decode a tag tree value by iterating thresholds 0..max.
+ *
+ * Calls j2k_decode_tagtree_leaf() with increasing thresholds until the
+ * tree signals "known" or max is reached. Used for zero-bit-plane tag trees
+ * where the leaf value is the number of zero bit-planes (no upper bound
+ * known a priori).
+ */
 static dic_status j2k_decode_tagtree_value(
     j2k_decode_tagtree *tree,
     int x,
@@ -770,6 +890,14 @@ static dic_status j2k_decode_tagtree_value(
     return DIC_J2K_FORMAT_ERROR;
 }
 
+/**
+ * @brief Decode number of coding passes from a packet header per Annex B.10.6.
+ *
+ * Variable-length code: 0=1 pass, 10=2 passes, 1100xx=3..6 (add 3 to xx),
+ * 1101xxxxx=6..36 (add 6), 1110xxxxxxx=37..163 (add 37). Maximum: 164 passes
+ * per code-block per layer. This maps to the Cleanup/SigProp/MagRef pass
+ * sequence of Annex D.5.
+ */
 static dic_status j2k_decode_coding_passes(
     j2k_decode_bit_reader *reader,
     uint32_t *passes
@@ -909,6 +1037,19 @@ static dic_status j2k_decode_stream_append(
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Decode a single LRCP packet per Annex B.10.
+ *
+ * Decodes the packet header (SOP marker if present, nonempty bit, inclusion
+ * tag tree per B.10.4, zero-bit-plane tag tree per B.10.5, coding pass count
+ * per B.10.6, coded segment lengths per B.10.7, EPH marker if present), then
+ * extracts MQ codeword bytes from the packet body and appends them to the
+ * corresponding code-block streams via j2k_decode_stream_append(). The stream
+ * accumulates MQ data across layers per Annex C.2-C.4.
+ *
+ * The lblock field tracks the minimum coded length indicator size for subsequent
+ * layers, initialized to 3 per Annex B.10.7.
+ */
 static dic_status j2k_decode_packet(
     const uint8_t *payload,
     size_t payload_size,
@@ -1115,7 +1256,7 @@ static dic_status j2k_decode_packet(
     return status;
 }
 
-static j2k_subband_orientation j2k_decode_orientation(dic_subband_orientation orientation)
+static j2k_subband_orientation j2k_decode_orientation(codec_subband_orientation orientation)
 {
     j2k_DEBUG_ENTER();
     if (orientation == DIC_SUBBAND_HL)
@@ -1197,6 +1338,15 @@ static dic_status j2k_decode_init_subband_blocks(j2k_decode_subband *subband)
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Build the sub-band array for all components and resolution levels.
+ *
+ * Creates per_component = 1 + 3*NL sub-band descriptors per component
+ * (1 LL + 3 per resolution level for HL/LH/HH). Each sub-band has its
+ * nominal bit-plane count (9 for LL, 10 for HL/LH, 11 for HH, plus chroma
+ * extra bits), computed rectangle via codec_subband_rect()/codec_subband_lowest_ll_rect(),
+ * and code-block grid with inclusion/zero tag trees initialized.
+ */
 static dic_status j2k_decode_make_subbands(
     int width,
     int height,
@@ -1239,7 +1389,7 @@ static dic_status j2k_decode_make_subbands(
         }
         else
         {
-            status = dic_subband_lowest_ll_rect(width, height, levels, &subbands[out].rect);
+            status = codec_subband_lowest_ll_rect(width, height, levels, &subbands[out].rect);
         }
         if (status == DIC_STATUS_OK)
             status = j2k_decode_init_subband_blocks(subbands + out);
@@ -1247,7 +1397,7 @@ static dic_status j2k_decode_make_subbands(
 
         for (resolution = 1; resolution <= levels && status == DIC_STATUS_OK; ++resolution)
         {
-            static const dic_subband_orientation orientations[] = {
+            static const codec_subband_orientation orientations[] = {
                 DIC_SUBBAND_HL,
                 DIC_SUBBAND_LH,
                 DIC_SUBBAND_HH
@@ -1263,7 +1413,7 @@ static dic_status j2k_decode_make_subbands(
                 subbands[out].orientation = j2k_decode_orientation(orientations[orientation_index]);
                 subbands[out].nominal_bitplanes = (orientations[orientation_index] == DIC_SUBBAND_HH ? 11u : 10u)
                     + extra_bits;
-                status = dic_subband_rect(width, height, levels, level, orientations[orientation_index], &subbands[out].rect);
+                status = codec_subband_rect(width, height, levels, level, orientations[orientation_index], &subbands[out].rect);
                 if (status == DIC_STATUS_OK)
                     status = j2k_decode_init_subband_blocks(subbands + out);
                 ++out;
@@ -1356,6 +1506,16 @@ static j2k_decode_subband *j2k_decode_packet_subbands(
     return subbands + start;
 }
 
+/**
+ * @brief Decode all EBCOT code-blocks and place coefficients into planar buffer.
+ *
+ * For each sub-band, iterates over its code-block grid. Each block is decoded
+ * via j2k_ebcot_decode_codeblock_rect() (Annex D: MQ decoder with Cleanup/SigProp/
+ * MagRef passes per Annex C.2-C.4), then the decoded int32 coefficients are
+ * memcpy'd into the correct position in the planar coefficient array. The
+ * destination position accounts for the sub-band rectangle (rect.x, rect.y) and
+ * code-block offset (bx, by) within the code-block grid per Annex B.7.
+ */
 static dic_status j2k_decode_subbands_to_planes(
     j2k_decode_subband *subbands,
     size_t subband_count,
@@ -1425,6 +1585,12 @@ static dic_status j2k_decode_subbands_to_planes(
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Reverse DC level shift and clamp to unsigned 8-bit [0, 255].
+ *
+ * Per Annex G.1/G.2: I(x,y) = I'(x,y) + 128. The clamp handles out-of-range
+ * values that may arise from lossy coding or numerical imprecision in DWT/IDWT.
+ */
 static uint8_t j2k_decode_unshift_u8(int32_t value)
 {
     j2k_DEBUG_ENTER();
@@ -1437,6 +1603,12 @@ static uint8_t j2k_decode_unshift_u8(int32_t value)
     return (uint8_t)shifted;
 }
 
+/**
+ * @brief Reverse DC level shift for double-precision values with rounding.
+ *
+ * Uses lround() for proper rounding of double to integer before the +128
+ * shift and [0,255] clamp. Used with irreversible (9-7 DWT + ICT) decoding.
+ */
 static uint8_t j2k_decode_unshift_double_u8(double value)
 {
     long rounded = lround(value + 128.0);
@@ -1448,6 +1620,14 @@ static uint8_t j2k_decode_unshift_double_u8(double value)
     return (uint8_t)rounded;
 }
 
+/**
+ * @brief Inverse quantize coefficients in a rectangular region.
+ *
+ * Per Annex E.1.1 Equation E-2: y = q * delta_b + sign(q)*delta_b/2.
+ * Applies j2k_dequantize_coefficient() to each sample in the sub-band
+ * rectangle, reconstructing double-precision DWT coefficients from
+ * quantized integer values.
+ */
 static dic_status j2k_decode_dequantize_rect(
     const int32_t *source,
     double *target,
@@ -1467,6 +1647,7 @@ static dic_status j2k_decode_dequantize_rect(
 
         for (x = 0; x < rect->width; ++x)
         {
+            /** Compute 1D offset into the plane accounting for rect origin. */
             size_t offset = (size_t)(rect->y + y) * (size_t)plane_width + (size_t)(rect->x + x);
             dic_status status = j2k_dequantize_coefficient(source[offset], step_size, target + offset);
 
@@ -1478,6 +1659,15 @@ static dic_status j2k_decode_dequantize_rect(
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex E, inverse quantization reconstructs irreversible DWT coefficients before IDWT. */
+
+/**
+ * @brief Inverse quantization: reconstruct double-precision coefficients from int32.
+ *
+ * Per Annex E.1.1 Equation E-2: y(u,v) = q(u,v) * delta_b + sign(q)*delta_b/2
+ * (midpoint reconstruction with dead-zone). Validates step_count matches
+ * expected: 1 + 3*NL. Iterates per sub-band using codec_subband_rect() for
+ * geometry, applying j2k_dequantize_coefficient().
+ */
 static dic_status j2k_decode_dequantize_planes(
     const int32_t *source,
     double *target,
@@ -1503,7 +1693,7 @@ static dic_status j2k_decode_dequantize_planes(
         dic_rect_i32 rect;
         dic_status status;
 
-        status = levels == 0 ? DIC_STATUS_OK : dic_subband_lowest_ll_rect(width, height, levels, &rect);
+        status = levels == 0 ? DIC_STATUS_OK : codec_subband_lowest_ll_rect(width, height, levels, &rect);
         if (levels == 0)
         {
             rect.x = 0;
@@ -1515,7 +1705,7 @@ static dic_status j2k_decode_dequantize_planes(
             status = j2k_decode_dequantize_rect(source_plane, target_plane, width, &rect, steps[0]);
         for (resolution = 1; status == DIC_STATUS_OK && resolution <= levels; ++resolution)
         {
-            static const dic_subband_orientation orientations[] = {
+            static const codec_subband_orientation orientations[] = {
                 DIC_SUBBAND_HL,
                 DIC_SUBBAND_LH,
                 DIC_SUBBAND_HH
@@ -1525,7 +1715,7 @@ static dic_status j2k_decode_dequantize_planes(
 
             for (index = 0; status == DIC_STATUS_OK && index < 3; ++index)
             {
-                status = dic_subband_rect(width, height, levels, level, orientations[index], &rect);
+                status = codec_subband_rect(width, height, levels, level, orientations[index], &rect);
                 if (status == DIC_STATUS_OK)
                 {
                     status = j2k_decode_dequantize_rect(
@@ -1544,6 +1734,27 @@ static dic_status j2k_decode_dequantize_planes(
     return DIC_STATUS_OK;
 }
 
+/**
+ * @brief Decode a complete tile payload: packets -> sub-bands -> IDWT -> output image.
+ *
+ * Full decode pipeline for one tile:
+ * 1. Allocate int32 planes and sub-band descriptors (including tag trees).
+ * 2. For each layer/resolution/component: decode packet via j2k_decode_packet(),
+ *    accumulating MQ codewords into code-block streams across layers.
+ * 3. EBCOT decode all code-blocks, placing coefficients into the plane array
+ *    via j2k_decode_subbands_to_planes().
+ * 4. If reversible: apply inverse 5-3 DWT (Annex F.3) to each component.
+ *    If irreversible: dequantize (Annex E.1.1), apply inverse 9-7 DWT (Annex F.4).
+ * 5. If MCT active: inverse RCT (Annex G.2) or inverse ICT (Annex G.1).
+ * 6. Level unshift: add 128 and clamp to [0, 255] unsigned 8-bit.
+ *
+ * @param payload / payload_size  Tile-part bit-stream data.
+ * @param params                  Parsed codestream parameters.
+ * @param max_layers              Maximum layers to decode (0 = all).
+ * @param tile_width / height     Tile dimensions.
+ * @param tile                    [out] Decoded tile image.
+ * @return DIC_STATUS_OK or error.
+ */
 static dic_status j2k_decode_tile_payload(
     const uint8_t *payload,
     size_t payload_size,
@@ -1775,6 +1986,22 @@ static const j2k_decode_tile_part *j2k_decode_find_tile(
     return NULL;
 }
 
+/**
+ * @brief Decode a complete codestream in memory to an unsigned 8-bit image.
+ *
+ * 1. Parse codestream markers (SOC, SIZ, COD, QCD, SOT, SOD) via
+ *    j2k_decode_parse_codestream() to extract parameters and tile-part offsets.
+ * 2. Compute tile grid dimensions and allocate output image buffer.
+ * 3. For each tile in raster order, locate the tile-part payload and decode it
+ *    via j2k_decode_tile_payload(), then copy decoded samples to the output image.
+ * 4. Tiles are assembled in their correct spatial positions per Annex B.5.
+ *
+ * @param data        Complete codestream bytes (non-NULL).
+ * @param size        Number of codestream bytes.
+ * @param max_layers  Limit decoded layers (0 = all layers).
+ * @param image       [out] Allocated decoded image.
+ * @return DIC_STATUS_OK or error.
+ */
 static dic_status j2k_decode_image_from_codestream(
     const uint8_t *data,
     size_t size,
@@ -1856,11 +2083,28 @@ static dic_status j2k_decode_image_from_codestream(
     return status;
 }
 
+/**
+ * @brief Read and decode a raw JPEG 2000 codestream (.j2k) file.
+ *
+ * Reads the file into memory and decodes via j2k_decode_image_from_codestream().
+ * All quality layers are decoded (max_layers=0). Delegates to the _layers variant.
+ *
+ * @param path   Input file path (.j2k).
+ * @param image  [out] Decoded unsigned 8-bit image.
+ * @return DIC_STATUS_OK or error.
+ */
 dic_status j2k_read_image_codestream(const char *path, dic_image_u8 *image)
 {
     return j2k_read_image_codestream_layers(path, 0u, image);
 }
 
+/**
+ * @brief Read and decode a raw codestream with layer limit for progressive display.
+ *
+ * Reads the file into a j2k_decode_buffer, then decodes up to max_layers
+ * quality layers. A value of 0 decodes all layers. Useful for testing
+ * progressive quality refinement.
+ */
 dic_status j2k_read_image_codestream_layers(const char *path, uint16_t max_layers, dic_image_u8 *image)
 {
     j2k_DEBUG_ENTER();
@@ -1876,11 +2120,29 @@ dic_status j2k_read_image_codestream_layers(const char *path, uint16_t max_layer
     return status;
 }
 
+/**
+ * @brief Read and decode a JP2 file (.jp2) per Annex I.
+ *
+ * Parses JP2 boxes to locate the Contiguous Codestream box (jp2c) per Annex I.5.2.1,
+ * then decodes the embedded codestream. All quality layers are decoded.
+ *
+ * @param path   Input file path (.jp2).
+ * @param image  [out] Decoded unsigned 8-bit image.
+ * @return DIC_STATUS_OK or error.
+ */
 dic_status j2k_read_image_jp2(const char *path, dic_image_u8 *image)
 {
     return j2k_read_image_jp2_layers(path, 0u, image);
 }
 
+/**
+ * @brief Read and decode a JP2 file with layer limit.
+ *
+ * Scans JP2 boxes using a view reader. When the jp2c box type (jp2_BOX_JP2C) is
+ * found, extracts the codestream data and decodes up to max_layers via
+ * j2k_decode_image_from_codestream(). Box length handling follows Annex I.3-I.5:
+ * length=0 means box extends to EOF, length=1 means 8-byte extended length.
+ */
 dic_status j2k_read_image_jp2_layers(const char *path, uint16_t max_layers, dic_image_u8 *image)
 {
     j2k_DEBUG_ENTER();

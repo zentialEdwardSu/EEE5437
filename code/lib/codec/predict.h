@@ -1,12 +1,13 @@
 #pragma once
 /**
  * @file dic_predict.h
- * @brief Predictive coding helpers for the lowest LL wavelet subband.
+ * @brief DPCM like operation to remove the horizontal correlation in the LL wavelet subband.
+ *        after predicted, 100 101 102 103 -> 100 1 2 3
  */
 
 #include <stdint.h>
 
-#include "codec/dic_subband.h"
+#include "codec/subband.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,7 +20,7 @@ extern "C" {
  * @param rect LL rectangle to predict.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_predict_ll_left(
+dic_status codec_predict_ll_left(
     int32_t *plane,
     int stride,
     dic_rect_i32 rect
@@ -32,7 +33,7 @@ dic_status dic_predict_ll_left(
  * @param rect LL rectangle to unpredict.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_unpredict_ll_left(
+dic_status codec_unpredict_ll_left(
     int32_t *plane,
     int stride,
     dic_rect_i32 rect

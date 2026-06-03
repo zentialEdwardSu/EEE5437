@@ -1,13 +1,13 @@
 /**
- * @file dic_metrics.c
+ * @file metrics.c
  * @brief Implements MSE, PSNR, and bitrate metrics for codec output.
  */
 
-#include "codec/dic_metrics.h"
+#include "codec/metrics.h"
 
 #include <math.h>
 
-double dic_metric_mse_u8(const uint8_t *a, const uint8_t *b, size_t sample_count)
+double codec_metric_mse_u8(const uint8_t *a, const uint8_t *b, size_t sample_count)
 {
     double sum = 0.0;
     size_t i;
@@ -26,9 +26,9 @@ double dic_metric_mse_u8(const uint8_t *a, const uint8_t *b, size_t sample_count
     return sum / (double)sample_count;
 }
 
-double dic_metric_psnr_u8(const uint8_t *a, const uint8_t *b, size_t sample_count)
+double codec_metric_psnr_u8(const uint8_t *a, const uint8_t *b, size_t sample_count)
 {
-    double mse = dic_metric_mse_u8(a, b, sample_count);
+    double mse = codec_metric_mse_u8(a, b, sample_count);
 
     if (mse < 0.0)
         return -1.0;
@@ -38,7 +38,7 @@ double dic_metric_psnr_u8(const uint8_t *a, const uint8_t *b, size_t sample_coun
     return 10.0 * log10((255.0 * 255.0) / mse);
 }
 
-double dic_metric_bitrate(size_t encoded_bits, int width, int height)
+double codec_metric_bitrate(size_t encoded_bits, int width, int height)
 {
     if (width <= 0 || height <= 0)
         return -1.0;

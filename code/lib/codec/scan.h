@@ -1,6 +1,6 @@
 #pragma once
 /**
- * @file dic_scan.h
+ * @file scan.h
  * @brief EZT-style scan-symbol encoding for quantized wavelet planes.
  */
 
@@ -14,7 +14,7 @@ extern "C" {
 #endif
 
 /** Symbol kind emitted by the coefficient scanner. */
-typedef enum dic_scan_symbol_kind
+typedef enum codec_scan_symbol_kind
 {
     /** Single zero coefficient. */
     DIC_SCAN_SYMBOL_ZERO = 0,
@@ -22,41 +22,41 @@ typedef enum dic_scan_symbol_kind
     DIC_SCAN_SYMBOL_EZT = 1,
     /** Nonzero coefficient with stored amplitude. */
     DIC_SCAN_SYMBOL_NONZERO = 2
-} dic_scan_symbol_kind;
+} codec_scan_symbol_kind;
 
 /** One scanned coefficient token. */
-typedef struct dic_scan_symbol
+typedef struct codec_scan_symbol
 {
-    /** Symbol kind from dic_scan_symbol_kind. */
+    /** Symbol kind from codec_scan_symbol_kind. */
     unsigned char kind;
     /** Bit width of amplitude for nonzero symbols, otherwise 0. */
     unsigned char size;
     /** Signed coefficient amplitude for nonzero symbols, otherwise 0. */
     int32_t amplitude;
-} dic_scan_symbol;
+} codec_scan_symbol;
 
 /** Growable buffer of scan symbols. */
-typedef struct dic_scan_symbol_buffer
+typedef struct codec_scan_symbol_buffer
 {
     /** Allocated symbol storage. */
-    dic_scan_symbol *symbols;
+    codec_scan_symbol *symbols;
     /** Number of valid symbols. */
     size_t count;
     /** Allocated symbol capacity. */
     size_t capacity;
-} dic_scan_symbol_buffer;
+} codec_scan_symbol_buffer;
 
 /**
  * @brief Initializes a scan-symbol buffer to an empty state.
  * @param buffer Buffer to initialize; NULL is ignored.
  */
-void dic_scan_symbol_buffer_init(dic_scan_symbol_buffer *buffer);
+void codec_scan_symbol_buffer_init(codec_scan_symbol_buffer *buffer);
 
 /**
  * @brief Frees storage owned by a scan-symbol buffer.
  * @param buffer Buffer to clear; NULL is ignored.
  */
-void dic_scan_symbol_buffer_free(dic_scan_symbol_buffer *buffer);
+void codec_scan_symbol_buffer_free(codec_scan_symbol_buffer *buffer);
 
 /**
  * @brief Encodes a quantized wavelet coefficient plane into scan symbols.
@@ -67,12 +67,12 @@ void dic_scan_symbol_buffer_free(dic_scan_symbol_buffer *buffer);
  * @param symbols Output symbol buffer; existing contents are freed before use.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_scan_encode_plane(
+dic_status codec_scan_encode_plane(
     const int32_t *plane,
     int width,
     int height,
     int levels,
-    dic_scan_symbol_buffer *symbols
+    codec_scan_symbol_buffer *symbols
 );
 
 /**
@@ -85,8 +85,8 @@ dic_status dic_scan_encode_plane(
  * @param plane Output coefficient plane in packed subband layout.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_scan_decode_plane(
-    const dic_scan_symbol *symbols,
+dic_status codec_scan_decode_plane(
+    const codec_scan_symbol *symbols,
     size_t symbol_count,
     int width,
     int height,
@@ -99,7 +99,7 @@ dic_status dic_scan_decode_plane(
  * @param amplitude Signed coefficient amplitude.
  * @return Bit width, or 0 when amplitude is zero.
  */
-unsigned char dic_scan_amplitude_size(int32_t amplitude);
+unsigned char codec_scan_amplitude_size(int32_t amplitude);
 
 #ifdef __cplusplus
 }

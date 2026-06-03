@@ -1,6 +1,6 @@
 #pragma once
 /**
- * @file dic_quant.h
+ * @file quant.h
  * @brief Scalar quantization helpers for signed 32-bit coefficients.
  */
 
@@ -20,7 +20,7 @@ extern "C" {
  * @param step_size Positive quantization step.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_quant_scalar_i32(
+dic_status codec_quant_scalar_i32(
     int32_t *values,
     size_t count,
     int step_size
@@ -33,7 +33,7 @@ dic_status dic_quant_scalar_i32(
  * @param step_size Positive quantization step used during encoding.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_dequant_scalar_i32(
+dic_status codec_dequant_scalar_i32(
     int32_t *values,
     size_t count,
     int step_size

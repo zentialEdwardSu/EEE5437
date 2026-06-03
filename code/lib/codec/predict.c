@@ -1,13 +1,8 @@
-/**
- * @file dic_predict.c
- * @brief Implements row-wise left prediction for LL wavelet coefficients.
- */
-
-#include "codec/dic_predict.h"
+#include "codec/predict.h"
 
 #include <stddef.h>
 
-dic_status dic_predict_ll_left(int32_t *plane, int stride, dic_rect_i32 rect)
+dic_status codec_predict_ll_left(int32_t *plane, int stride, dic_rect_i32 rect)
 {
     int y;
 
@@ -31,7 +26,7 @@ dic_status dic_predict_ll_left(int32_t *plane, int stride, dic_rect_i32 rect)
     return DIC_STATUS_OK;
 }
 
-dic_status dic_unpredict_ll_left(int32_t *plane, int stride, dic_rect_i32 rect)
+dic_status codec_unpredict_ll_left(int32_t *plane, int stride, dic_rect_i32 rect)
 {
     int y;
 

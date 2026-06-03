@@ -1,13 +1,13 @@
 #include <string.h>
 
-#include "codec/dic_scan.h"
+#include "codec/scan.h"
 #include "test_helpers.h"
 
 int main(void)
 {
     int32_t plane[8 * 8];
     int32_t reconstructed[8 * 8];
-    dic_scan_symbol_buffer symbols = {0};
+    codec_scan_symbol_buffer symbols = {0};
     int i;
     int ezt_seen = 0;
 
@@ -19,7 +19,7 @@ int main(void)
     plane[16] = 11;
     plane[63] = 2;
 
-    DIC_EXPECT(dic_scan_encode_plane(plane, 8, 8, 3, &symbols) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_scan_encode_plane(plane, 8, 8, 3, &symbols) == DIC_STATUS_OK);
     DIC_EXPECT(symbols.count > 0u);
     for (i = 0; i < (int)symbols.count; ++i)
     {
@@ -28,9 +28,9 @@ int main(void)
     }
     DIC_EXPECT(ezt_seen);
 
-    DIC_EXPECT(dic_scan_decode_plane(symbols.symbols, symbols.count, 8, 8, 3, reconstructed) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_scan_decode_plane(symbols.symbols, symbols.count, 8, 8, 3, reconstructed) == DIC_STATUS_OK);
     DIC_EXPECT(memcmp(plane, reconstructed, sizeof(plane)) == 0);
 
-    dic_scan_symbol_buffer_free(&symbols);
+    codec_scan_symbol_buffer_free(&symbols);
     return 0;
 }

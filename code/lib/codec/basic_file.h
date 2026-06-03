@@ -1,12 +1,12 @@
 #pragma once
 /**
- * @file dic_basic_file.h
+ * @file basic_file.h
  * @brief File and stream serialization for the basic codec bitstream.
  */
 
 #include <stdio.h>
 
-#include "codec/dic_basic_codec.h"
+#include "codec/basic_codec.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,9 +21,9 @@ extern "C" {
  * @param encoded Encoded image to serialize.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_basic_write_file(
+dic_status codec_basic_write_file(
     const char *path,
-    const dic_basic_encoded_image *encoded
+    const codec_basic_encoded_image *encoded
 );
 
 /**
@@ -32,9 +32,9 @@ dic_status dic_basic_write_file(
  * @param encoded Output encoded image; existing contents are freed before reading.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_basic_read_file(
+dic_status codec_basic_read_file(
     const char *path,
-    dic_basic_encoded_image *encoded
+    codec_basic_encoded_image *encoded
 );
 
 /**
@@ -43,9 +43,9 @@ dic_status dic_basic_read_file(
  * @param encoded Encoded image to serialize.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_basic_write_stream(
+dic_status codec_basic_write_stream(
     FILE *file,
-    const dic_basic_encoded_image *encoded
+    const codec_basic_encoded_image *encoded
 );
 
 /**
@@ -54,9 +54,9 @@ dic_status dic_basic_write_stream(
  * @param encoded Output encoded image; existing contents are freed before reading.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_basic_read_stream(
+dic_status codec_basic_read_stream(
     FILE *file,
-    dic_basic_encoded_image *encoded
+    codec_basic_encoded_image *encoded
 );
 
 #ifdef __cplusplus

@@ -1,17 +1,17 @@
 /**
- * @file dic_scan.c
+ * @file scan.c
  * @brief Implements coefficient scanning and embedded zerotree markers.
  */
 
-#include "codec/dic_scan.h"
+#include "codec/scan.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "codec/dic_subband.h"
+#include "codec/subband.h"
 #include "wavelet/dic_dwt53.h"
 
-void dic_scan_symbol_buffer_init(dic_scan_symbol_buffer *buffer)
+void codec_scan_symbol_buffer_init(codec_scan_symbol_buffer *buffer)
 {
     if (buffer == NULL)
         return;
@@ -21,23 +21,23 @@ void dic_scan_symbol_buffer_init(dic_scan_symbol_buffer *buffer)
     buffer->capacity = 0u;
 }
 
-void dic_scan_symbol_buffer_free(dic_scan_symbol_buffer *buffer)
+void codec_scan_symbol_buffer_free(codec_scan_symbol_buffer *buffer)
 {
     if (buffer == NULL)
         return;
 
     free(buffer->symbols);
-    dic_scan_symbol_buffer_init(buffer);
+    codec_scan_symbol_buffer_init(buffer);
 }
 
-static dic_status dic_scan_symbol_buffer_reserve(
-    dic_scan_symbol_buffer *buffer,
+static dic_status codec_scan_symbol_buffer_reserve(
+    codec_scan_symbol_buffer *buffer,
     size_t additional
 )
 {
     size_t required;
     size_t capacity;
-    dic_scan_symbol *symbols;
+    codec_scan_symbol *symbols;
 
     if (buffer == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -59,7 +59,7 @@ static dic_status dic_scan_symbol_buffer_reserve(
         capacity *= 2u;
     }
 
-    symbols = (dic_scan_symbol *)realloc(buffer->symbols, capacity * sizeof(symbols[0]));
+    symbols = (codec_scan_symbol *)realloc(buffer->symbols, capacity * sizeof(symbols[0]));
     if (symbols == NULL)
         return DIC_STATUS_MEMORY_ERROR;
 
@@ -68,7 +68,7 @@ static dic_status dic_scan_symbol_buffer_reserve(
     return DIC_STATUS_OK;
 }
 
-unsigned char dic_scan_amplitude_size(int32_t amplitude)
+unsigned char codec_scan_amplitude_size(int32_t amplitude)
 {
     uint32_t magnitude;
     unsigned char bits = 0u;
@@ -88,14 +88,14 @@ unsigned char dic_scan_amplitude_size(int32_t amplitude)
     return bits;
 }
 
-static dic_status dic_scan_append_symbol(
-    dic_scan_symbol_buffer *buffer,
+static dic_status codec_scan_append_symbol(
+    codec_scan_symbol_buffer *buffer,
     unsigned char kind,
     int32_t amplitude
 )
 {
-    dic_status status = dic_scan_symbol_buffer_reserve(buffer, 1u);
-    dic_scan_symbol *symbol;
+    dic_status status = codec_scan_symbol_buffer_reserve(buffer, 1u);
+    codec_scan_symbol *symbol;
 
     if (status != DIC_STATUS_OK)
         return status;
@@ -104,23 +104,23 @@ static dic_status dic_scan_append_symbol(
     symbol->kind = kind;
     symbol->amplitude = amplitude;
     symbol->size = kind == DIC_SCAN_SYMBOL_NONZERO
-        ? dic_scan_amplitude_size(amplitude)
+        ? codec_scan_amplitude_size(amplitude)
         : 0u;
     ++buffer->count;
     return DIC_STATUS_OK;
 }
 
-static size_t dic_scan_index(int width, int x, int y)
+static size_t codec_scan_index(int width, int x, int y)
 {
     return ((size_t)y * (size_t)width) + (size_t)x;
 }
 
-static int dic_scan_descendants_are_zero(
+static int codec_scan_descendants_are_zero(
     const int32_t *plane,
     int width,
     int height,
     int level,
-    dic_subband_orientation orientation,
+    codec_subband_orientation orientation,
     int local_x,
     int local_y
 )
@@ -131,7 +131,7 @@ static int dic_scan_descendants_are_zero(
 
     if (level <= 1)
         return 1;
-    if (dic_subband_rect(width, height, level, level - 1, orientation, &child_rect) != DIC_STATUS_OK)
+    if (codec_subband_rect(width, height, level, level - 1, orientation, &child_rect) != DIC_STATUS_OK)
         return 0;
 
     for (dy = 0; dy < 2; ++dy)
@@ -148,9 +148,9 @@ static int dic_scan_descendants_are_zero(
 
             image_x = child_rect.x + child_x;
             image_y = child_rect.y + child_y;
-            if (plane[dic_scan_index(width, image_x, image_y)] != 0)
+            if (plane[codec_scan_index(width, image_x, image_y)] != 0)
                 return 0;
-            if (!dic_scan_descendants_are_zero(
+            if (!codec_scan_descendants_are_zero(
                     plane,
                     width,
                     height,
@@ -167,12 +167,12 @@ static int dic_scan_descendants_are_zero(
     return 1;
 }
 
-static void dic_scan_mark_descendants(
+static void codec_scan_mark_descendants(
     unsigned char *visited,
     int width,
     int height,
     int level,
-    dic_subband_orientation orientation,
+    codec_subband_orientation orientation,
     int local_x,
     int local_y
 )
@@ -183,7 +183,7 @@ static void dic_scan_mark_descendants(
 
     if (level <= 1)
         return;
-    if (dic_subband_rect(width, height, level, level - 1, orientation, &child_rect) != DIC_STATUS_OK)
+    if (codec_subband_rect(width, height, level, level - 1, orientation, &child_rect) != DIC_STATUS_OK)
         return;
 
     for (dy = 0; dy < 2; ++dy)
@@ -200,8 +200,8 @@ static void dic_scan_mark_descendants(
 
             image_x = child_rect.x + child_x;
             image_y = child_rect.y + child_y;
-            visited[dic_scan_index(width, image_x, image_y)] = 1u;
-            dic_scan_mark_descendants(
+            visited[codec_scan_index(width, image_x, image_y)] = 1u;
+            codec_scan_mark_descendants(
                 visited,
                 width,
                 height,
@@ -214,11 +214,11 @@ static void dic_scan_mark_descendants(
     }
 }
 
-static dic_status dic_scan_encode_ll(
+static dic_status codec_scan_encode_ll(
     const int32_t *plane,
     int width,
     dic_rect_i32 ll_rect,
-    dic_scan_symbol_buffer *symbols
+    codec_scan_symbol_buffer *symbols
 )
 {
     int y;
@@ -229,8 +229,8 @@ static dic_status dic_scan_encode_ll(
 
         for (x = 0; x < ll_rect.width; ++x)
         {
-            int32_t value = plane[dic_scan_index(width, ll_rect.x + x, ll_rect.y + y)];
-            dic_status status = dic_scan_append_symbol(
+            int32_t value = plane[codec_scan_index(width, ll_rect.x + x, ll_rect.y + y)];
+            dic_status status = codec_scan_append_symbol(
                 symbols,
                 value == 0 ? DIC_SCAN_SYMBOL_ZERO : DIC_SCAN_SYMBOL_NONZERO,
                 value
@@ -243,21 +243,21 @@ static dic_status dic_scan_encode_ll(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_scan_encode_high_band(
+static dic_status codec_scan_encode_high_band(
     const int32_t *plane,
     int width,
     int height,
     int level,
-    dic_subband_orientation orientation,
+    codec_subband_orientation orientation,
     unsigned char *visited,
-    dic_scan_symbol_buffer *symbols
+    codec_scan_symbol_buffer *symbols
 )
 {
     dic_rect_i32 rect;
     dic_status status;
     int y;
 
-    status = dic_subband_rect(width, height, level, level, orientation, &rect);
+    status = codec_subband_rect(width, height, level, level, orientation, &rect);
     if (status != DIC_STATUS_OK)
         return status;
 
@@ -269,7 +269,7 @@ static dic_status dic_scan_encode_high_band(
         {
             int image_x = rect.x + x;
             int image_y = rect.y + y;
-            size_t index = dic_scan_index(width, image_x, image_y);
+            size_t index = codec_scan_index(width, image_x, image_y);
             int32_t value;
 
             if (visited[index])
@@ -279,7 +279,7 @@ static dic_status dic_scan_encode_high_band(
             visited[index] = 1u;
             if (value == 0
                 && level > 1
-                && dic_scan_descendants_are_zero(
+                && codec_scan_descendants_are_zero(
                     plane,
                     width,
                     height,
@@ -288,12 +288,12 @@ static dic_status dic_scan_encode_high_band(
                     x,
                     y))
             {
-                dic_scan_mark_descendants(visited, width, height, level, orientation, x, y);
-                status = dic_scan_append_symbol(symbols, DIC_SCAN_SYMBOL_EZT, 0);
+                codec_scan_mark_descendants(visited, width, height, level, orientation, x, y);
+                status = codec_scan_append_symbol(symbols, DIC_SCAN_SYMBOL_EZT, 0);
             }
             else
             {
-                status = dic_scan_append_symbol(
+                status = codec_scan_append_symbol(
                     symbols,
                     value == 0 ? DIC_SCAN_SYMBOL_ZERO : DIC_SCAN_SYMBOL_NONZERO,
                     value
@@ -308,12 +308,12 @@ static dic_status dic_scan_encode_high_band(
     return DIC_STATUS_OK;
 }
 
-dic_status dic_scan_encode_plane(
+dic_status codec_scan_encode_plane(
     const int32_t *plane,
     int width,
     int height,
     int levels,
-    dic_scan_symbol_buffer *symbols
+    codec_scan_symbol_buffer *symbols
 )
 {
     dic_rect_i32 ll_rect;
@@ -328,28 +328,28 @@ dic_status dic_scan_encode_plane(
     if (status != DIC_STATUS_OK)
         return status;
 
-    dic_scan_symbol_buffer_free(symbols);
-    status = dic_subband_lowest_ll_rect(width, height, levels, &ll_rect);
+    codec_scan_symbol_buffer_free(symbols);
+    status = codec_subband_lowest_ll_rect(width, height, levels, &ll_rect);
     if (status != DIC_STATUS_OK)
         return status;
 
-    status = dic_scan_encode_ll(plane, width, ll_rect, symbols);
+    status = codec_scan_encode_ll(plane, width, ll_rect, symbols);
     if (status != DIC_STATUS_OK)
     {
-        dic_scan_symbol_buffer_free(symbols);
+        codec_scan_symbol_buffer_free(symbols);
         return status;
     }
 
     visited = (unsigned char *)calloc((size_t)width * (size_t)height, 1u);
     if (visited == NULL)
     {
-        dic_scan_symbol_buffer_free(symbols);
+        codec_scan_symbol_buffer_free(symbols);
         return DIC_STATUS_MEMORY_ERROR;
     }
 
     for (level = levels; level >= 1; --level)
     {
-        status = dic_scan_encode_high_band(
+        status = codec_scan_encode_high_band(
             plane,
             width,
             height,
@@ -359,7 +359,7 @@ dic_status dic_scan_encode_plane(
             symbols
         );
         if (status == DIC_STATUS_OK)
-            status = dic_scan_encode_high_band(
+            status = codec_scan_encode_high_band(
                 plane,
                 width,
                 height,
@@ -369,7 +369,7 @@ dic_status dic_scan_encode_plane(
                 symbols
             );
         if (status == DIC_STATUS_OK)
-            status = dic_scan_encode_high_band(
+            status = codec_scan_encode_high_band(
                 plane,
                 width,
                 height,
@@ -384,15 +384,15 @@ dic_status dic_scan_encode_plane(
 
     free(visited);
     if (status != DIC_STATUS_OK)
-        dic_scan_symbol_buffer_free(symbols);
+        codec_scan_symbol_buffer_free(symbols);
     return status;
 }
 
-static dic_status dic_scan_next_symbol(
-    const dic_scan_symbol *symbols,
+static dic_status codec_scan_next_symbol(
+    const codec_scan_symbol *symbols,
     size_t symbol_count,
     size_t *offset,
-    dic_scan_symbol *symbol
+    codec_scan_symbol *symbol
 )
 {
     if (symbols == NULL || offset == NULL || symbol == NULL)
@@ -409,7 +409,7 @@ static dic_status dic_scan_next_symbol(
         return DIC_HW4_FORMAT_ERROR;
     }
     if (symbol->kind == DIC_SCAN_SYMBOL_NONZERO
-        && (symbol->amplitude == 0 || symbol->size != dic_scan_amplitude_size(symbol->amplitude)))
+        && (symbol->amplitude == 0 || symbol->size != codec_scan_amplitude_size(symbol->amplitude)))
     {
         return DIC_HW4_FORMAT_ERROR;
     }
@@ -419,8 +419,8 @@ static dic_status dic_scan_next_symbol(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_scan_decode_ll(
-    const dic_scan_symbol *symbols,
+static dic_status codec_scan_decode_ll(
+    const codec_scan_symbol *symbols,
     size_t symbol_count,
     size_t *offset,
     int width,
@@ -436,15 +436,15 @@ static dic_status dic_scan_decode_ll(
 
         for (x = 0; x < ll_rect.width; ++x)
         {
-            dic_scan_symbol symbol;
-            dic_status status = dic_scan_next_symbol(symbols, symbol_count, offset, &symbol);
+            codec_scan_symbol symbol;
+            dic_status status = codec_scan_next_symbol(symbols, symbol_count, offset, &symbol);
 
             if (status != DIC_STATUS_OK)
                 return status;
             if (symbol.kind == DIC_SCAN_SYMBOL_EZT)
                 return DIC_HW4_FORMAT_ERROR;
 
-            plane[dic_scan_index(width, ll_rect.x + x, ll_rect.y + y)] =
+            plane[codec_scan_index(width, ll_rect.x + x, ll_rect.y + y)] =
                 symbol.kind == DIC_SCAN_SYMBOL_NONZERO ? symbol.amplitude : 0;
         }
     }
@@ -452,14 +452,14 @@ static dic_status dic_scan_decode_ll(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_scan_decode_high_band(
-    const dic_scan_symbol *symbols,
+static dic_status codec_scan_decode_high_band(
+    const codec_scan_symbol *symbols,
     size_t symbol_count,
     size_t *offset,
     int width,
     int height,
     int level,
-    dic_subband_orientation orientation,
+    codec_subband_orientation orientation,
     unsigned char *visited,
     int32_t *plane
 )
@@ -468,7 +468,7 @@ static dic_status dic_scan_decode_high_band(
     dic_status status;
     int y;
 
-    status = dic_subband_rect(width, height, level, level, orientation, &rect);
+    status = codec_subband_rect(width, height, level, level, orientation, &rect);
     if (status != DIC_STATUS_OK)
         return status;
 
@@ -480,13 +480,13 @@ static dic_status dic_scan_decode_high_band(
         {
             int image_x = rect.x + x;
             int image_y = rect.y + y;
-            size_t index = dic_scan_index(width, image_x, image_y);
-            dic_scan_symbol symbol;
+            size_t index = codec_scan_index(width, image_x, image_y);
+            codec_scan_symbol symbol;
 
             if (visited[index])
                 continue;
 
-            status = dic_scan_next_symbol(symbols, symbol_count, offset, &symbol);
+            status = codec_scan_next_symbol(symbols, symbol_count, offset, &symbol);
             if (status != DIC_STATUS_OK)
                 return status;
 
@@ -494,7 +494,7 @@ static dic_status dic_scan_decode_high_band(
             if (symbol.kind == DIC_SCAN_SYMBOL_EZT)
             {
                 plane[index] = 0;
-                dic_scan_mark_descendants(visited, width, height, level, orientation, x, y);
+                codec_scan_mark_descendants(visited, width, height, level, orientation, x, y);
             }
             else
             {
@@ -506,8 +506,8 @@ static dic_status dic_scan_decode_high_band(
     return DIC_STATUS_OK;
 }
 
-dic_status dic_scan_decode_plane(
-    const dic_scan_symbol *symbols,
+dic_status codec_scan_decode_plane(
+    const codec_scan_symbol *symbols,
     size_t symbol_count,
     int width,
     int height,
@@ -529,11 +529,11 @@ dic_status dic_scan_decode_plane(
         return status;
 
     memset(plane, 0, (size_t)width * (size_t)height * sizeof(plane[0]));
-    status = dic_subband_lowest_ll_rect(width, height, levels, &ll_rect);
+    status = codec_subband_lowest_ll_rect(width, height, levels, &ll_rect);
     if (status != DIC_STATUS_OK)
         return status;
 
-    status = dic_scan_decode_ll(symbols, symbol_count, &offset, width, ll_rect, plane);
+    status = codec_scan_decode_ll(symbols, symbol_count, &offset, width, ll_rect, plane);
     if (status != DIC_STATUS_OK)
         return status;
 
@@ -543,7 +543,7 @@ dic_status dic_scan_decode_plane(
 
     for (level = levels; level >= 1; --level)
     {
-        status = dic_scan_decode_high_band(
+        status = codec_scan_decode_high_band(
             symbols,
             symbol_count,
             &offset,
@@ -555,7 +555,7 @@ dic_status dic_scan_decode_plane(
             plane
         );
         if (status == DIC_STATUS_OK)
-            status = dic_scan_decode_high_band(
+            status = codec_scan_decode_high_band(
                 symbols,
                 symbol_count,
                 &offset,
@@ -567,7 +567,7 @@ dic_status dic_scan_decode_plane(
                 plane
             );
         if (status == DIC_STATUS_OK)
-            status = dic_scan_decode_high_band(
+            status = codec_scan_decode_high_band(
                 symbols,
                 symbol_count,
                 &offset,

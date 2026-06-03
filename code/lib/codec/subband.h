@@ -1,6 +1,6 @@
 #pragma once
 /**
- * @file dic_subband.h
+ * @file subband.h
  * @brief Rectangle layout helpers for multilevel 5/3 DWT subbands.
  */
 
@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 /** Subband orientation in the packed wavelet coefficient plane. */
-typedef enum dic_subband_orientation
+typedef enum codec_subband_orientation
 {
     /** Lowest low-low approximation band. */
     DIC_SUBBAND_LL = 0,
@@ -21,7 +21,7 @@ typedef enum dic_subband_orientation
     DIC_SUBBAND_LH = 2,
     /** Horizontal high-pass, vertical high-pass detail band. */
     DIC_SUBBAND_HH = 3
-} dic_subband_orientation;
+} codec_subband_orientation;
 
 /** Integer rectangle in a packed coefficient plane. */
 typedef struct dic_rect_i32
@@ -44,7 +44,7 @@ typedef struct dic_rect_i32
  * @param rect Output rectangle.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_subband_lowest_ll_rect(
+dic_status codec_subband_lowest_ll_rect(
     int width,
     int height,
     int levels,
@@ -61,12 +61,12 @@ dic_status dic_subband_lowest_ll_rect(
  * @param rect Output rectangle.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status dic_subband_rect(
+dic_status codec_subband_rect(
     int width,
     int height,
     int levels,
     int level,
-    dic_subband_orientation orientation,
+    codec_subband_orientation orientation,
     dic_rect_i32 *rect
 );
 

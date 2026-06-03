@@ -1,9 +1,9 @@
 /**
- * @file dic_basic_file.c
+ * @file basic_file.c
  * @brief Implements DICW serialization with Huffman-coded scan-symbol tokens.
  */
 
-#include "codec/dic_basic_file.h"
+#include "codec/basic_file.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -20,7 +20,7 @@ enum
     DIC_BASIC_TOKEN_COUNT = 34
 };
 
-static FILE *dic_basic_open_file(const char *path, const char *mode)
+static FILE *codec_basic_open_file(const char *path, const char *mode)
 {
     FILE *file = NULL;
 #if defined(_MSC_VER)
@@ -32,7 +32,7 @@ static FILE *dic_basic_open_file(const char *path, const char *mode)
 #endif
 }
 
-static int dic_basic_write_u32_le(FILE *file, uint32_t value)
+static int codec_basic_write_u32_le(FILE *file, uint32_t value)
 {
     unsigned char bytes[4];
 
@@ -43,12 +43,12 @@ static int dic_basic_write_u32_le(FILE *file, uint32_t value)
     return fwrite(bytes, 1u, sizeof(bytes), file) == sizeof(bytes);
 }
 
-static int dic_basic_write_i32_le(FILE *file, int32_t value)
+static int codec_basic_write_i32_le(FILE *file, int32_t value)
 {
-    return dic_basic_write_u32_le(file, (uint32_t)value);
+    return codec_basic_write_u32_le(file, (uint32_t)value);
 }
 
-static int dic_basic_read_u32_le(FILE *file, uint32_t *value)
+static int codec_basic_read_u32_le(FILE *file, uint32_t *value)
 {
     unsigned char bytes[4];
 
@@ -64,28 +64,28 @@ static int dic_basic_read_u32_le(FILE *file, uint32_t *value)
     return 1;
 }
 
-static int dic_basic_read_i32_le(FILE *file, int32_t *value)
+static int codec_basic_read_i32_le(FILE *file, int32_t *value)
 {
     uint32_t raw;
 
-    if (!dic_basic_read_u32_le(file, &raw))
+    if (!codec_basic_read_u32_le(file, &raw))
         return 0;
     *value = (int32_t)raw;
     return 1;
 }
 
-static unsigned int dic_basic_map_token(const void *element)
+static unsigned int codec_basic_map_token(const void *element)
 {
     return (unsigned int)(*(const unsigned char *)element);
 }
 
-static void dic_basic_write_token(void *element, unsigned int symbol)
+static void codec_basic_write_token(void *element, unsigned int symbol)
 {
     *(unsigned char *)element = (unsigned char)symbol;
 }
 
-static dic_status dic_basic_symbols_to_tokens(
-    const dic_scan_symbol *symbols,
+static dic_status codec_basic_symbols_to_tokens(
+    const codec_scan_symbol *symbols,
     size_t symbol_count,
     unsigned char **tokens_out,
     size_t counts[DIC_BASIC_TOKEN_COUNT],
@@ -131,7 +131,7 @@ static dic_status dic_basic_symbols_to_tokens(
             if (symbols[i].amplitude == 0
                 || symbols[i].size == 0u
                 || symbols[i].size > 32u
-                || symbols[i].size != dic_scan_amplitude_size(symbols[i].amplitude))
+                || symbols[i].size != codec_scan_amplitude_size(symbols[i].amplitude))
             {
                 free(tokens);
                 return DIC_HW4_FORMAT_ERROR;
@@ -154,9 +154,9 @@ static dic_status dic_basic_symbols_to_tokens(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_basic_write_channel(
+static dic_status codec_basic_write_channel(
     FILE *file,
-    const dic_basic_channel_stream *stream
+    const codec_basic_channel_stream *stream
 )
 {
     size_t counts[DIC_BASIC_TOKEN_COUNT];
@@ -175,7 +175,7 @@ static dic_status dic_basic_write_channel(
     dic_hw2_huffman_tree_init(&tree);
     dic_hw2_huffman_bitstream_init(&bitstream);
 
-    status = dic_basic_symbols_to_tokens(
+    status = codec_basic_symbols_to_tokens(
         stream->symbols,
         stream->symbol_count,
         &tokens,
@@ -198,7 +198,7 @@ static dic_status dic_basic_write_channel(
             tokens,
             stream->symbol_count,
             sizeof(tokens[0]),
-            dic_basic_map_token,
+            codec_basic_map_token,
             &bitstream
         );
     }
@@ -216,8 +216,8 @@ static dic_status dic_basic_write_channel(
         return DIC_HW4_FORMAT_ERROR;
     }
 
-    if (!dic_basic_write_u32_le(file, (uint32_t)stream->symbol_count)
-        || !dic_basic_write_u32_le(file, (uint32_t)amplitude_count))
+    if (!codec_basic_write_u32_le(file, (uint32_t)stream->symbol_count)
+        || !codec_basic_write_u32_le(file, (uint32_t)amplitude_count))
     {
         dic_hw2_huffman_tree_free(&tree);
         dic_hw2_huffman_bitstream_free(&bitstream);
@@ -227,7 +227,7 @@ static dic_status dic_basic_write_channel(
     for (i = 0; i < DIC_BASIC_TOKEN_COUNT; ++i)
     {
         if (counts[i] > (size_t)UINT32_MAX
-            || !dic_basic_write_u32_le(file, (uint32_t)counts[i]))
+            || !codec_basic_write_u32_le(file, (uint32_t)counts[i]))
         {
             dic_hw2_huffman_tree_free(&tree);
             dic_hw2_huffman_bitstream_free(&bitstream);
@@ -235,7 +235,7 @@ static dic_status dic_basic_write_channel(
         }
     }
 
-    if (!dic_basic_write_u32_le(file, (uint32_t)bitstream.bit_count)
+    if (!codec_basic_write_u32_le(file, (uint32_t)bitstream.bit_count)
         || (bitstream.byte_count > 0u
             && fwrite(bitstream.bytes, 1u, bitstream.byte_count, file) != bitstream.byte_count))
     {
@@ -248,7 +248,7 @@ static dic_status dic_basic_write_channel(
     {
         if (stream->symbols[i].kind != DIC_SCAN_SYMBOL_NONZERO)
             continue;
-        if (!dic_basic_write_i32_le(file, stream->symbols[i].amplitude))
+        if (!codec_basic_write_i32_le(file, stream->symbols[i].amplitude))
         {
             dic_hw2_huffman_tree_free(&tree);
             dic_hw2_huffman_bitstream_free(&bitstream);
@@ -261,9 +261,9 @@ static dic_status dic_basic_write_channel(
     return DIC_STATUS_OK;
 }
 
-dic_status dic_basic_write_file(
+dic_status codec_basic_write_file(
     const char *path,
-    const dic_basic_encoded_image *encoded
+    const codec_basic_encoded_image *encoded
 )
 {
     FILE *file = NULL;
@@ -272,19 +272,19 @@ dic_status dic_basic_write_file(
     if (path == NULL || encoded == NULL || encoded->channel_streams == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    file = dic_basic_open_file(path, "wb");
+    file = codec_basic_open_file(path, "wb");
     if (file == NULL)
         return DIC_STATUS_IO_ERROR;
 
-    status = dic_basic_write_stream(file, encoded);
+    status = codec_basic_write_stream(file, encoded);
     if (fclose(file) != 0 && status == DIC_STATUS_OK)
         status = DIC_STATUS_IO_ERROR;
     return status;
 }
 
-dic_status dic_basic_write_stream(
+dic_status codec_basic_write_stream(
     FILE *file,
-    const dic_basic_encoded_image *encoded
+    const codec_basic_encoded_image *encoded
 )
 {
     dic_status status = DIC_STATUS_OK;
@@ -300,19 +300,19 @@ dic_status dic_basic_write_stream(
         return DIC_STATUS_INVALID_ARGUMENT;
 
     if (fwrite(DIC_BASIC_FILE_MAGIC, 1u, 4u, file) != 4u
-        || !dic_basic_write_u32_le(file, DIC_BASIC_FILE_VERSION)
-        || !dic_basic_write_u32_le(file, (uint32_t)encoded->width)
-        || !dic_basic_write_u32_le(file, (uint32_t)encoded->height)
-        || !dic_basic_write_u32_le(file, (uint32_t)encoded->channels)
-        || !dic_basic_write_u32_le(file, (uint32_t)encoded->levels)
-        || !dic_basic_write_u32_le(file, (uint32_t)encoded->quant_step))
+        || !codec_basic_write_u32_le(file, DIC_BASIC_FILE_VERSION)
+        || !codec_basic_write_u32_le(file, (uint32_t)encoded->width)
+        || !codec_basic_write_u32_le(file, (uint32_t)encoded->height)
+        || !codec_basic_write_u32_le(file, (uint32_t)encoded->channels)
+        || !codec_basic_write_u32_le(file, (uint32_t)encoded->levels)
+        || !codec_basic_write_u32_le(file, (uint32_t)encoded->quant_step))
     {
         return DIC_STATUS_IO_ERROR;
     }
 
     for (channel = 0; channel < encoded->channels; ++channel)
     {
-        status = dic_basic_write_channel(file, encoded->channel_streams + channel);
+        status = codec_basic_write_channel(file, encoded->channel_streams + channel);
         if (status != DIC_STATUS_OK)
             break;
     }
@@ -320,15 +320,15 @@ dic_status dic_basic_write_stream(
     return status;
 }
 
-static dic_status dic_basic_rebuild_symbols(
+static dic_status codec_basic_rebuild_symbols(
     const unsigned char *tokens,
     size_t token_count,
     const int32_t *amplitudes,
     size_t amplitude_count,
-    dic_scan_symbol **symbols_out
+    codec_scan_symbol **symbols_out
 )
 {
-    dic_scan_symbol *symbols = NULL;
+    codec_scan_symbol *symbols = NULL;
     size_t amplitude_offset = 0u;
     size_t i;
 
@@ -337,7 +337,7 @@ static dic_status dic_basic_rebuild_symbols(
     if (amplitudes == NULL && amplitude_count > 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    symbols = (dic_scan_symbol *)calloc(token_count, sizeof(symbols[0]));
+    symbols = (codec_scan_symbol *)calloc(token_count, sizeof(symbols[0]));
     if (symbols == NULL && token_count > 0u)
         return DIC_STATUS_MEMORY_ERROR;
 
@@ -372,7 +372,7 @@ static dic_status dic_basic_rebuild_symbols(
             symbols[i].kind = DIC_SCAN_SYMBOL_NONZERO;
             symbols[i].size = (unsigned char)(token - DIC_BASIC_TOKEN_SIZE_BASE + 1u);
             symbols[i].amplitude = amplitude;
-            if (amplitude == 0 || symbols[i].size != dic_scan_amplitude_size(amplitude))
+            if (amplitude == 0 || symbols[i].size != codec_scan_amplitude_size(amplitude))
             {
                 free(symbols);
                 return DIC_HW4_FORMAT_ERROR;
@@ -394,9 +394,9 @@ static dic_status dic_basic_rebuild_symbols(
     return DIC_STATUS_OK;
 }
 
-static dic_status dic_basic_read_channel(
+static dic_status codec_basic_read_channel(
     FILE *file,
-    dic_basic_channel_stream *stream
+    codec_basic_channel_stream *stream
 )
 {
     uint32_t symbol_count_u32;
@@ -417,8 +417,8 @@ static dic_status dic_basic_read_channel(
     if (file == NULL || stream == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    if (!dic_basic_read_u32_le(file, &symbol_count_u32)
-        || !dic_basic_read_u32_le(file, &amplitude_count_u32))
+    if (!codec_basic_read_u32_le(file, &symbol_count_u32)
+        || !codec_basic_read_u32_le(file, &amplitude_count_u32))
     {
         return DIC_HW4_FORMAT_ERROR;
     }
@@ -430,7 +430,7 @@ static dic_status dic_basic_read_channel(
     {
         uint32_t count_u32;
 
-        if (!dic_basic_read_u32_le(file, &count_u32))
+        if (!codec_basic_read_u32_le(file, &count_u32))
             return DIC_HW4_FORMAT_ERROR;
         counts[i] = (size_t)count_u32;
         expected_symbol_count += counts[i];
@@ -439,7 +439,7 @@ static dic_status dic_basic_read_channel(
     if (expected_symbol_count != symbol_count)
         return DIC_HW4_FORMAT_ERROR;
 
-    if (!dic_basic_read_u32_le(file, &bit_count_u32))
+    if (!codec_basic_read_u32_le(file, &bit_count_u32))
         return DIC_HW4_FORMAT_ERROR;
 
     bit_byte_count = ((size_t)bit_count_u32 + 7u) / 8u;
@@ -476,7 +476,7 @@ static dic_status dic_basic_read_channel(
             symbol_count,
             tokens,
             sizeof(tokens[0]),
-            dic_basic_write_token
+            codec_basic_write_token
         );
     }
 
@@ -499,7 +499,7 @@ static dic_status dic_basic_read_channel(
 
     for (i = 0; i < amplitude_count; ++i)
     {
-        if (!dic_basic_read_i32_le(file, amplitudes + i))
+        if (!codec_basic_read_i32_le(file, amplitudes + i))
         {
             free(tokens);
             free(amplitudes);
@@ -507,7 +507,7 @@ static dic_status dic_basic_read_channel(
         }
     }
 
-    status = dic_basic_rebuild_symbols(
+    status = codec_basic_rebuild_symbols(
         tokens,
         symbol_count,
         amplitudes,
@@ -522,9 +522,9 @@ static dic_status dic_basic_read_channel(
     return status;
 }
 
-dic_status dic_basic_read_file(
+dic_status codec_basic_read_file(
     const char *path,
-    dic_basic_encoded_image *encoded
+    codec_basic_encoded_image *encoded
 )
 {
     FILE *file = NULL;
@@ -533,23 +533,23 @@ dic_status dic_basic_read_file(
     if (path == NULL || encoded == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    file = dic_basic_open_file(path, "rb");
+    file = codec_basic_open_file(path, "rb");
     if (file == NULL)
         return DIC_STATUS_FILE_OPEN_ERROR;
 
-    status = dic_basic_read_stream(file, encoded);
+    status = codec_basic_read_stream(file, encoded);
     if (status == DIC_STATUS_OK && fgetc(file) != EOF)
         status = DIC_HW4_FORMAT_ERROR;
 
     fclose(file);
     if (status != DIC_STATUS_OK)
-        dic_basic_encoded_free(encoded);
+        codec_basic_encoded_free(encoded);
     return status;
 }
 
-dic_status dic_basic_read_stream(
+dic_status codec_basic_read_stream(
     FILE *file,
-    dic_basic_encoded_image *encoded
+    codec_basic_encoded_image *encoded
 )
 {
     char magic[4];
@@ -565,16 +565,16 @@ dic_status dic_basic_read_stream(
     if (file == NULL || encoded == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    dic_basic_encoded_free(encoded);
+    codec_basic_encoded_free(encoded);
 
     if (fread(magic, 1u, sizeof(magic), file) != sizeof(magic)
         || memcmp(magic, DIC_BASIC_FILE_MAGIC, sizeof(magic)) != 0
-        || !dic_basic_read_u32_le(file, &version)
-        || !dic_basic_read_u32_le(file, &width)
-        || !dic_basic_read_u32_le(file, &height)
-        || !dic_basic_read_u32_le(file, &channels)
-        || !dic_basic_read_u32_le(file, &levels)
-        || !dic_basic_read_u32_le(file, &quant_step))
+        || !codec_basic_read_u32_le(file, &version)
+        || !codec_basic_read_u32_le(file, &width)
+        || !codec_basic_read_u32_le(file, &height)
+        || !codec_basic_read_u32_le(file, &channels)
+        || !codec_basic_read_u32_le(file, &levels)
+        || !codec_basic_read_u32_le(file, &quant_step))
     {
         return DIC_HW4_FORMAT_ERROR;
     }
@@ -587,7 +587,7 @@ dic_status dic_basic_read_stream(
         return DIC_HW4_FORMAT_ERROR;
     }
 
-    encoded->channel_streams = (dic_basic_channel_stream *)calloc(
+    encoded->channel_streams = (codec_basic_channel_stream *)calloc(
         (size_t)channels,
         sizeof(encoded->channel_streams[0])
     );
@@ -602,12 +602,12 @@ dic_status dic_basic_read_stream(
 
     for (channel = 0; channel < encoded->channels; ++channel)
     {
-        status = dic_basic_read_channel(file, encoded->channel_streams + channel);
+        status = codec_basic_read_channel(file, encoded->channel_streams + channel);
         if (status != DIC_STATUS_OK)
             break;
     }
 
     if (status != DIC_STATUS_OK)
-        dic_basic_encoded_free(encoded);
+        codec_basic_encoded_free(encoded);
     return status;
 }

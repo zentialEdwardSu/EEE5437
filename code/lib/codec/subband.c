@@ -1,13 +1,13 @@
 /**
- * @file dic_subband.c
+ * @file subband.c
  * @brief Implements packed 5/3 DWT subband rectangle calculations.
  */
 
-#include "codec/dic_subband.h"
+#include "codec/subband.h"
 
 #include "wavelet/dic_dwt53.h"
 
-dic_status dic_subband_lowest_ll_rect(
+dic_status codec_subband_lowest_ll_rect(
     int width,
     int height,
     int levels,
@@ -37,12 +37,12 @@ dic_status dic_subband_lowest_ll_rect(
     return DIC_STATUS_OK;
 }
 
-dic_status dic_subband_rect(
+dic_status codec_subband_rect(
     int width,
     int height,
     int levels,
     int level,
-    dic_subband_orientation orientation,
+    codec_subband_orientation orientation,
     dic_rect_i32 *rect
 )
 {
@@ -57,10 +57,9 @@ dic_status dic_subband_rect(
 
     if (rect == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
+
     if (orientation == DIC_SUBBAND_LL)
-        return dic_subband_lowest_ll_rect(width, height, levels, rect);
-    if (level < 1 || level > levels)
-        return DIC_HW4_INVALID_LEVELS;
+        return codec_subband_lowest_ll_rect(width, height, levels, rect);
 
     status = dic_dwt53_validate_levels(width, height, levels);
     if (status != DIC_STATUS_OK)
