@@ -20,10 +20,11 @@ int main(void)
     DIC_EXPECT(encoded.width == 16);
     DIC_EXPECT(encoded.height == 16);
     DIC_EXPECT(encoded.channels == 1);
-    DIC_EXPECT(encoded.num_bitplanes > 0);
+    DIC_EXPECT(encoded.channel_streams != NULL);
+    DIC_EXPECT(encoded.channel_streams[0].resolutions != NULL);
 
     /* Full decode */
-    DIC_EXPECT(codec_basic_decode_image(&encoded, &decoded) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_decode_image(&encoded, encoded.levels, 0, &decoded) == DIC_STATUS_OK);
     DIC_EXPECT(decoded.width == 16);
     DIC_EXPECT(decoded.height == 16);
     DIC_EXPECT(decoded.channels == 1);
@@ -34,15 +35,22 @@ int main(void)
     dic_image_u8_free(&decoded);
 
     /* Progressive decode: PSNR should increase with more bitplanes */
-    psnr_prev = -1.0;
-    for (bp = 1; bp <= encoded.num_bitplanes; ++bp) {
-        dic_image_u8 prog = {0};
-        double psnr_prog;
-        DIC_EXPECT(codec_basic_decode_image_bitplanes(&encoded, bp, &prog) == DIC_STATUS_OK);
-        psnr_prog = codec_metric_psnr_u8(source, prog.data, 16u * 16u);
-        DIC_EXPECT(psnr_prog >= psnr_prev - 0.01);
-        psnr_prev = psnr_prog;
-        dic_image_u8_free(&prog);
+    {
+        int max_bp = 0;
+        int res;
+        for (res = 0; res <= encoded.levels; ++res)
+            if (encoded.channel_streams[0].resolutions[res].num_bitplanes > max_bp)
+                max_bp = encoded.channel_streams[0].resolutions[res].num_bitplanes;
+        psnr_prev = -1.0;
+        for (bp = 1; bp <= max_bp; ++bp) {
+            dic_image_u8 prog = {0};
+            double psnr_prog;
+            DIC_EXPECT(codec_basic_decode_image(&encoded, encoded.levels, bp, &prog) == DIC_STATUS_OK);
+            psnr_prog = codec_metric_psnr_u8(source, prog.data, 16u * 16u);
+            DIC_EXPECT(psnr_prog >= psnr_prev - 0.01);
+            psnr_prev = psnr_prog;
+            dic_image_u8_free(&prog);
+        }
     }
 
     codec_basic_encoded_free(&encoded);

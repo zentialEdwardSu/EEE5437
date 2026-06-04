@@ -100,7 +100,7 @@ double imageDecoder(
         return -1.0;
     }
 
-    if (codec_basic_decode_image(&encoded, &decoded) != DIC_STATUS_OK)
+    if (codec_basic_decode_image(&encoded, encoded.levels, 0, &decoded) != DIC_STATUS_OK)
     {
         codec_basic_encoded_free(&encoded);
         return -1.0;

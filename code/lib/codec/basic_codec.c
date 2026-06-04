@@ -21,7 +21,6 @@ void codec_basic_encoded_init(codec_basic_encoded_image *encoded)
     encoded->channels = 0;
     encoded->levels = 0;
     encoded->quant_step = 0;
-    encoded->num_bitplanes = 0;
     encoded->channel_streams = NULL;
 }
 
@@ -32,11 +31,18 @@ void codec_basic_encoded_free(codec_basic_encoded_image *encoded)
     if (encoded->channel_streams != NULL) {
         for (channel = 0; channel < encoded->channels; ++channel) {
             codec_basic_channel_stream *stream = encoded->channel_streams + channel;
-            int bp;
-            if (stream->bitplanes != NULL) {
-                for (bp = 0; bp < stream->num_bitplanes; ++bp)
-                    codec_scan_bitplane_free(stream->bitplanes + bp);
-                free(stream->bitplanes);
+            int res;
+            if (stream->resolutions != NULL) {
+                for (res = 0; res < stream->num_resolutions; ++res) {
+                    codec_basic_resolution_stream *rs = stream->resolutions + res;
+                    int bp;
+                    if (rs->bitplanes != NULL) {
+                        for (bp = 0; bp < rs->num_bitplanes; ++bp)
+                            codec_scan_bitplane_free(rs->bitplanes + bp);
+                        free(rs->bitplanes);
+                    }
+                }
+                free(stream->resolutions);
             }
         }
         free(encoded->channel_streams);
@@ -96,6 +102,7 @@ dic_status codec_basic_encode_image(
     dic_rect_i32 ll_rect;
     dic_status status;
     int channel;
+    int resolution;
 
     if (input == NULL || encoded == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -124,8 +131,15 @@ dic_status codec_basic_encode_image(
 
     for (channel = 0; channel < channels; ++channel) {
         codec_basic_channel_stream *stream = encoded->channel_streams + channel;
-        codec_scan_bitplane *bps = NULL;
-        int bp_count = 0;
+
+        stream->num_resolutions = levels + 1;
+        stream->resolutions = (codec_basic_resolution_stream *)calloc(
+            (size_t)stream->num_resolutions, sizeof(stream->resolutions[0]));
+        if (stream->resolutions == NULL) {
+            free(plane);
+            codec_basic_encoded_free(encoded);
+            return DIC_STATUS_MEMORY_ERROR;
+        }
 
         codec_basic_copy_channel_to_plane(input, width, height, channels, channel, plane);
 
@@ -134,43 +148,69 @@ dic_status codec_basic_encode_image(
             status = codec_quant_scalar_i32(plane, plane_count, quant_step);
         if (status == DIC_STATUS_OK)
             status = codec_predict_ll_left(plane, width, ll_rect);
-        if (status == DIC_STATUS_OK)
-            status = codec_scan_encode_plane(plane, width, height, levels, &bps, &bp_count);
+
+        /* Encode each resolution independently */
+        for (resolution = 0; status == DIC_STATUS_OK && resolution <= levels; ++resolution) {
+            codec_basic_resolution_stream *rs = stream->resolutions + resolution;
+
+            rs->resolution = resolution;
+            status = codec_scan_encode_subbands(
+                plane, width, height, levels, resolution,
+                &rs->bitplanes, &rs->num_bitplanes);
+        }
 
         if (status != DIC_STATUS_OK) {
             free(plane);
             codec_basic_encoded_free(encoded);
             return status;
         }
-
-        stream->bitplanes = bps;
-        stream->num_bitplanes = bp_count;
-        encoded->num_bitplanes = bp_count;
     }
 
     free(plane);
     return DIC_STATUS_OK;
 }
 
-dic_status codec_basic_decode_image(
-    const codec_basic_encoded_image *encoded, dic_image_u8 *decoded)
+/** Compute output image size for max_resolution levels of IDWT. */
+static void codec_basic_output_size(
+    int width, int height, int levels, int max_resolution,
+    int *out_width, int *out_height)
 {
-    if (encoded == NULL) return DIC_STATUS_INVALID_ARGUMENT;
-    return codec_basic_decode_image_bitplanes(encoded, encoded->num_bitplanes, decoded);
+    int ll_w = width;
+    int ll_h = height;
+    int i;
+
+    for (i = 0; i < levels; ++i) {
+        ll_w = dic_dwt53_low_size(ll_w);
+        ll_h = dic_dwt53_low_size(ll_h);
+    }
+
+    *out_width = ll_w;
+    *out_height = ll_h;
+    for (i = 0; i < max_resolution; ++i) {
+        *out_width *= 2;
+        *out_height *= 2;
+    }
 }
 
-dic_status codec_basic_decode_image_bitplanes(
-    const codec_basic_encoded_image *encoded, int num_bitplanes, dic_image_u8 *decoded)
+dic_status codec_basic_decode_image(
+    const codec_basic_encoded_image *encoded,
+    int max_resolution,
+    int num_bitplanes,
+    dic_image_u8 *decoded)
 {
+    int out_width, out_height;
     size_t plane_count;
     int32_t *plane = NULL;
     dic_rect_i32 ll_rect;
     dic_status status;
     int channel;
+    int resolution;
 
     if (encoded == NULL || decoded == NULL || encoded->channel_streams == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
-    if (num_bitplanes <= 0 || num_bitplanes > encoded->num_bitplanes)
+    if (max_resolution < 0 || max_resolution > encoded->levels)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (num_bitplanes < 0)
         return DIC_STATUS_INVALID_ARGUMENT;
 
     status = codec_basic_validate_params(
@@ -178,40 +218,77 @@ dic_status codec_basic_decode_image_bitplanes(
         encoded->levels, encoded->quant_step);
     if (status != DIC_STATUS_OK) return status;
 
-    plane_count = (size_t)encoded->width * (size_t)encoded->height;
-    plane = (int32_t *)malloc(plane_count * sizeof(plane[0]));
+    codec_basic_output_size(encoded->width, encoded->height, encoded->levels,
+                            max_resolution, &out_width, &out_height);
+
+    plane_count = (size_t)out_width * (size_t)out_height;
+    plane = (int32_t *)calloc(plane_count, sizeof(plane[0]));
     if (plane == NULL) return DIC_STATUS_MEMORY_ERROR;
 
-    status = dic_image_u8_alloc(decoded, encoded->width, encoded->height, encoded->channels);
+    status = dic_image_u8_alloc(decoded, out_width, out_height, encoded->channels);
     if (status != DIC_STATUS_OK) { free(plane); return status; }
 
-    status = codec_subband_lowest_ll_rect(
-        encoded->width, encoded->height, encoded->levels, &ll_rect);
+    /* LL rect in output plane (used for inverse LL prediction) */
+    if (max_resolution > 0)
+    {
+        status = codec_subband_lowest_ll_rect(out_width, out_height, max_resolution, &ll_rect);
+    }
+    else
+    {
+        ll_rect.x = 0;
+        ll_rect.y = 0;
+        ll_rect.width = out_width;
+        ll_rect.height = out_height;
+    }
     if (status != DIC_STATUS_OK) { dic_image_u8_free(decoded); free(plane); return status; }
 
-    for (channel = 0; channel < encoded->channels; ++channel) {
+    for (channel = 0; channel < encoded->channels; ++channel)
+    {
         const codec_basic_channel_stream *stream = encoded->channel_streams + channel;
 
-        status = codec_scan_decode_plane(
-            stream->bitplanes, stream->num_bitplanes, num_bitplanes,
-            encoded->width, encoded->height, encoded->levels, plane);
-        if (status == DIC_STATUS_OK)
-            status = codec_unpredict_ll_left(plane, encoded->width, ll_rect);
-        if (status == DIC_STATUS_OK)
-            status = codec_dequant_scalar_i32(plane, plane_count, encoded->quant_step);
-        if (status == DIC_STATUS_OK)
-            status = dic_dwt53_inverse_plane(plane, encoded->width, encoded->height, encoded->levels);
+        /* Decode each resolution into the output plane */
+        for (resolution = 0; resolution <= max_resolution; ++resolution)
+        {
+            const codec_basic_resolution_stream *rs = stream->resolutions + resolution;
+            int bp_to_decode;
 
-        if (status != DIC_STATUS_OK) {
-            dic_image_u8_free(decoded);
-            free(plane);
-            return status;
+            if (rs->num_bitplanes == 0)
+                continue;  /* All-zero resolution — plane is already zeroed */
+
+            bp_to_decode = (num_bitplanes == 0 || num_bitplanes > rs->num_bitplanes)
+                ? rs->num_bitplanes : num_bitplanes;
+
+            status = codec_scan_decode_subbands(
+                rs->bitplanes, rs->num_bitplanes, bp_to_decode,
+                out_width, out_height, max_resolution, resolution, plane);
+            if (status != DIC_STATUS_OK) break;
         }
+        if (status != DIC_STATUS_OK) break;
 
+        /* Inverse LL prediction (on LL region of output plane) */
+        if (max_resolution > 0 || encoded->levels > 0)
+            status = codec_unpredict_ll_left(plane, out_width, ll_rect);
+        if (status != DIC_STATUS_OK) break;
+
+        /* Dequantize */
+        status = codec_dequant_scalar_i32(plane, plane_count, encoded->quant_step);
+        if (status != DIC_STATUS_OK) break;
+
+        /* Inverse DWT — only max_resolution levels */
+        if (max_resolution > 0)
+            status = dic_dwt53_inverse_plane(plane, out_width, out_height, max_resolution);
+        if (status != DIC_STATUS_OK) break;
+
+        /* Copy decoded plane to interleaved output */
         codec_basic_copy_plane_to_channel(
-            plane, encoded->width, encoded->height, encoded->channels, channel, decoded->data);
+            plane, out_width, out_height, encoded->channels, channel, decoded->data);
     }
 
     free(plane);
+    if (status != DIC_STATUS_OK)
+    {
+        dic_image_u8_free(decoded);
+        return status;
+    }
     return DIC_STATUS_OK;
 }

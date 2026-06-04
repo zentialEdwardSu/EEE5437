@@ -37,10 +37,11 @@ int main(void)
             source[(y * 16) + x] = (uint8_t)(20 + x * 8 + y * 3 + ((x + y) % 5));
 
     DIC_EXPECT(codec_basic_encode_image(source, 16, 16, 1, 3, 4, &encoded) == DIC_STATUS_OK);
-    DIC_EXPECT(encoded.num_bitplanes > 0);
+    DIC_EXPECT(encoded.channel_streams != NULL);
+    DIC_EXPECT(encoded.channel_streams[0].resolutions != NULL);
 
     /* In-memory roundtrip */
-    DIC_EXPECT(codec_basic_decode_image(&encoded, &decoded_mem) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_decode_image(&encoded, encoded.levels, 0, &decoded_mem) == DIC_STATUS_OK);
     psnr_mem = codec_metric_psnr_u8(source, decoded_mem.data, 16u * 16u);
 
     /* File roundtrip */
@@ -54,9 +55,8 @@ int main(void)
     DIC_EXPECT(read_back.channels == encoded.channels);
     DIC_EXPECT(read_back.levels == encoded.levels);
     DIC_EXPECT(read_back.quant_step == encoded.quant_step);
-    DIC_EXPECT(read_back.num_bitplanes == encoded.num_bitplanes);
 
-    DIC_EXPECT(codec_basic_decode_image(&read_back, &decoded_file) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_decode_image(&read_back, read_back.levels, 0, &decoded_file) == DIC_STATUS_OK);
     psnr_file = codec_metric_psnr_u8(source, decoded_file.data, 16u * 16u);
 
     DIC_EXPECT(psnr_mem > 25.0);
@@ -74,8 +74,7 @@ int main(void)
         double partial_psnr;
 
         DIC_EXPECT(codec_basic_read_file_bitplanes(path, 1, &partial) == DIC_STATUS_OK);
-        DIC_EXPECT(partial.num_bitplanes == 1);
-        DIC_EXPECT(codec_basic_decode_image(&partial, &partial_decoded) == DIC_STATUS_OK);
+        DIC_EXPECT(codec_basic_decode_image(&partial, partial.levels, 0, &partial_decoded) == DIC_STATUS_OK);
         partial_psnr = codec_metric_psnr_u8(source, partial_decoded.data, 16u * 16u);
         printf("  full PSNR=%.4f, 1-bp PSNR=%.4f\n", psnr_file, partial_psnr);
         DIC_EXPECT(partial_psnr < psnr_file);
