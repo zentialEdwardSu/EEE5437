@@ -540,6 +540,289 @@ unsigned char codec_scan_amplitude_size(int32_t amplitude)
     return bits;
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Per-resolution helpers                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * @brief Fill @p rects with the subband rectangles for one resolution level.
+ * @param count [out] Number of rectangles written (1 for res=0, 3 for res≥1).
+ * @return DIC_STATUS_OK on success.
+ */
+static dic_status codec_scan_resolution_rects(
+    int width, int height, int levels, int resolution,
+    dic_rect_i32 rects[3], int *count)
+{
+    if (count == NULL || rects == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    if (resolution == 0)
+    {
+        *count = 1;
+        return codec_subband_lowest_ll_rect(width, height, levels, rects);
+    }
+
+    /* Resolution r ≥ 1 maps to DWT level = levels - r + 1 */
+    {
+        int level = levels - resolution + 1;
+        codec_subband_orientation orientations[3] = {
+            DIC_SUBBAND_HL, DIC_SUBBAND_LH, DIC_SUBBAND_HH
+        };
+        int band;
+        dic_status status = DIC_STATUS_OK;
+
+        *count = 3;
+        for (band = 0; band < 3; ++band)
+        {
+            status = codec_subband_rect(width, height, levels, level,
+                                        orientations[band], rects + band);
+            if (status != DIC_STATUS_OK)
+                return status;
+        }
+        return DIC_STATUS_OK;
+    }
+}
+
+/**
+ * @brief Return max bitplane index of coefficients in the given rectangles,
+ * or -1 if all coefficients are zero.
+ */
+static int codec_scan_find_max_bitplane_in_rects(
+    const int32_t *plane, int width,
+    const dic_rect_i32 *rects, int rect_count)
+{
+    uint32_t max_mag = 0u;
+    int r;
+
+    for (r = 0; r < rect_count; ++r)
+    {
+        const dic_rect_i32 *rect = rects + r;
+        int y;
+        for (y = 0; y < rect->height; ++y)
+        {
+            int x;
+            for (x = 0; x < rect->width; ++x)
+            {
+                size_t idx = ((size_t)(rect->y + y) * (size_t)width) + (size_t)(rect->x + x);
+                uint32_t mag = plane[idx] < 0
+                    ? (uint32_t)(-(plane[idx] + 1)) + 1u
+                    : (uint32_t)plane[idx];
+                if (mag > max_mag)
+                    max_mag = mag;
+            }
+        }
+    }
+
+    if (max_mag == 0u)
+        return -1;
+
+    {
+        int bp = -1;
+        while (max_mag > 0u) { ++bp; max_mag >>= 1; }
+        return bp;
+    }
+}
+
+/**
+ * @brief Encode significance pass for one bitplane over given subband rectangles.
+ *
+ * No zerotree: all insignificants emit IZ (coefficient descendants are in
+ * finer resolution levels not accessible within this encoding unit).
+ */
+static dic_status codec_scan_encode_significance_pass_nozt(
+    int32_t *plane, int width,
+    const dic_rect_i32 *rects, int rect_count,
+    int32_t threshold, unsigned char *significant,
+    codec_scan_token_buffer *tokens, codec_scan_sig_order *sig_order)
+{
+    int r;
+    dic_status status = DIC_STATUS_OK;
+
+    for (r = 0; r < rect_count && status == DIC_STATUS_OK; ++r)
+    {
+        const dic_rect_i32 *rect = rects + r;
+        int y;
+
+        for (y = 0; y < rect->height && status == DIC_STATUS_OK; ++y)
+        {
+            int x;
+            for (x = 0; x < rect->width; ++x)
+            {
+                size_t idx = ((size_t)(rect->y + y) * (size_t)width) + (size_t)(rect->x + x);
+                int32_t val;
+                unsigned char token;
+
+                if (significant[idx])
+                    continue;
+
+                val = plane[idx];
+                if (val >= threshold || val <= -threshold)
+                {
+                    if (val > 0)
+                    {
+                        token = (unsigned char)DIC_SCAN_TOKEN_POS;
+                        plane[idx] = val - threshold;
+                    }
+                    else
+                    {
+                        token = (unsigned char)DIC_SCAN_TOKEN_NEG;
+                        plane[idx] = val + threshold;
+                    }
+                    significant[idx] = 1u;
+                    status = codec_scan_sig_order_append(sig_order, idx);
+                }
+                else
+                {
+                    token = (unsigned char)DIC_SCAN_TOKEN_IZ;
+                }
+                if (status == DIC_STATUS_OK)
+                    status = codec_scan_token_buffer_append(tokens, token);
+            }
+        }
+    }
+    return status;
+}
+
+dic_status codec_scan_encode_subbands(
+    const int32_t *plane, int width, int height, int levels,
+    int resolution, codec_scan_bitplane **bitplanes_out, int *bitplane_count_out)
+{
+    dic_rect_i32 rects[3];
+    int rect_count;
+    int max_bp, total_bp;
+    codec_scan_bitplane *bps = NULL;
+    unsigned char *significant = NULL;
+    codec_scan_sig_order sig_order;
+    dic_status status = DIC_STATUS_OK;
+    int32_t *work_plane = NULL;
+    size_t plane_count;
+    int bp;
+
+    if (plane == NULL || bitplanes_out == NULL || bitplane_count_out == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    *bitplanes_out = NULL;
+    *bitplane_count_out = 0;
+
+    status = dic_dwt53_validate_levels(width, height, levels);
+    if (status != DIC_STATUS_OK) return status;
+
+    if (resolution < 0 || resolution > levels)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    status = codec_scan_resolution_rects(width, height, levels, resolution,
+                                          rects, &rect_count);
+    if (status != DIC_STATUS_OK) return status;
+
+    plane_count = (size_t)width * (size_t)height;
+
+    max_bp = codec_scan_find_max_bitplane_in_rects(plane, width, rects, rect_count);
+    if (max_bp < 0)
+    {
+        /* All coefficients zero — return 0 bitplanes */
+        return DIC_STATUS_OK;
+    }
+
+    total_bp = max_bp + 1;
+    bps = (codec_scan_bitplane *)calloc((size_t)total_bp, sizeof(bps[0]));
+    if (bps == NULL) return DIC_STATUS_MEMORY_ERROR;
+
+    work_plane = (int32_t *)malloc(plane_count * sizeof(work_plane[0]));
+    if (work_plane == NULL) { free(bps); return DIC_STATUS_MEMORY_ERROR; }
+    memcpy(work_plane, plane, plane_count * sizeof(plane[0]));
+
+    significant = (unsigned char *)calloc(plane_count, 1u);
+    if (significant == NULL) { free(work_plane); free(bps); return DIC_STATUS_MEMORY_ERROR; }
+
+    codec_scan_sig_order_init(&sig_order);
+
+    for (bp = max_bp; bp >= 0; --bp)
+    {
+        int32_t threshold = (int32_t)(1u << (unsigned)bp);
+        codec_scan_token_buffer token_buf;
+        codec_scan_bit_writer bit_writer;
+        size_t sig_before = sig_order.count;
+        codec_scan_bitplane *cur = bps + (max_bp - bp);
+        size_t k;
+
+        codec_scan_token_buffer_init(&token_buf);
+        codec_scan_bit_writer_init(&bit_writer);
+
+        /* Significance pass — no zerotree */
+        status = codec_scan_encode_significance_pass_nozt(
+            work_plane, width, rects, rect_count, threshold,
+            significant, &token_buf, &sig_order);
+        if (status != DIC_STATUS_OK)
+        {
+            codec_scan_token_buffer_free(&token_buf);
+            break;
+        }
+
+        /* Refinement pass for previously-significant coefficients */
+        status = codec_scan_bit_writer_ensure(sig_before, &bit_writer);
+        if (status == DIC_STATUS_OK && sig_before > 0u)
+        {
+            size_t saved = sig_order.count;
+            sig_order.count = sig_before;
+            status = codec_scan_encode_refinement_pass(
+                work_plane, bp, &sig_order, sig_before, &bit_writer);
+            sig_order.count = saved;
+        }
+        if (status == DIC_STATUS_OK)
+            codec_scan_bit_writer_flush(&bit_writer);
+
+        if (status != DIC_STATUS_OK)
+        {
+            free(bit_writer.bytes);
+            codec_scan_token_buffer_free(&token_buf);
+            break;
+        }
+
+        /* Token frequencies (ZTR always 0) */
+        memset(cur->token_freq, 0, sizeof(cur->token_freq));
+        for (k = 0; k < token_buf.count; ++k)
+        {
+            unsigned char tok = token_buf.tokens[k];
+            if (tok < DIC_SCAN_TOKEN_COUNT) ++cur->token_freq[tok];
+        }
+        cur->dominant_token_count = token_buf.count;
+
+        /* Huffman-encode tokens */
+        status = codec_scan_huffman_encode(
+            cur->token_freq, token_buf.tokens, token_buf.count, &cur->dominant_stream);
+
+        if (status == DIC_STATUS_OK)
+        {
+            cur->subordinate_bits = bit_writer.bytes;
+            cur->subordinate_bit_count = bit_writer.bit_count;
+            cur->subordinate_byte_count = (bit_writer.bit_count + 7u) / 8u;
+        }
+        else
+        {
+            free(bit_writer.bytes);
+        }
+
+        codec_scan_token_buffer_free(&token_buf);
+        if (status != DIC_STATUS_OK) break;
+    }
+
+    codec_scan_sig_order_free(&sig_order);
+    free(significant);
+    free(work_plane);
+
+    if (status != DIC_STATUS_OK)
+    {
+        int i;
+        for (i = 0; i < total_bp; ++i) codec_scan_bitplane_free(bps + i);
+        free(bps);
+        return status;
+    }
+
+    *bitplanes_out = bps;
+    *bitplane_count_out = total_bp;
+    return DIC_STATUS_OK;
+}
+
 dic_status codec_scan_encode_plane(
     const int32_t *plane, int width, int height, int levels,
     codec_scan_bitplane **bitplanes_out, int *bitplane_count_out)
@@ -670,6 +953,178 @@ dic_status codec_scan_encode_plane(
     *bitplanes_out = bps;
     *bitplane_count_out = total_bp;
     return DIC_STATUS_OK;
+}
+
+/**
+ * @brief Decode significance pass for one bitplane over subband rectangles,
+ * placing coefficients at correct positions in the output plane.
+ */
+static dic_status codec_scan_decode_significance_pass_nozt(
+    const unsigned char *tokens, size_t token_count, size_t *token_offset,
+    int out_width,
+    const dic_rect_i32 *rects, int rect_count,
+    int32_t threshold, unsigned char *significant,
+    codec_scan_sig_order *sig_order, int32_t *plane)
+{
+    int r;
+    dic_status status = DIC_STATUS_OK;
+
+    for (r = 0; r < rect_count && status == DIC_STATUS_OK; ++r)
+    {
+        const dic_rect_i32 *rect = rects + r;
+        int y;
+
+        for (y = 0; y < rect->height && status == DIC_STATUS_OK; ++y)
+        {
+            int x;
+            for (x = 0; x < rect->width; ++x)
+            {
+                size_t idx = ((size_t)(rect->y + y) * (size_t)out_width) + (size_t)(rect->x + x);
+
+                if (significant[idx])
+                    continue;
+
+                if (*token_offset >= token_count)
+                {
+                    status = DIC_HW4_FORMAT_ERROR;
+                    break;
+                }
+
+                {
+                    unsigned char token = tokens[(*token_offset)++];
+                    if (token == (unsigned char)DIC_SCAN_TOKEN_POS)
+                    {
+                        plane[idx] = threshold;
+                        significant[idx] = 1u;
+                        status = codec_scan_sig_order_append(sig_order, idx);
+                    }
+                    else if (token == (unsigned char)DIC_SCAN_TOKEN_NEG)
+                    {
+                        plane[idx] = -threshold;
+                        significant[idx] = 1u;
+                        status = codec_scan_sig_order_append(sig_order, idx);
+                    }
+                    else if (token != (unsigned char)DIC_SCAN_TOKEN_IZ)
+                    {
+                        /* ZTR should never appear in per-resolution streams */
+                        status = DIC_HW4_FORMAT_ERROR;
+                    }
+                }
+            }
+        }
+    }
+    return status;
+}
+
+dic_status codec_scan_decode_subbands(
+    const codec_scan_bitplane *bitplanes, int total_bitplane_count,
+    int decode_bitplanes, int out_width, int out_height, int max_resolution,
+    int resolution, int32_t *plane)
+{
+    size_t plane_count;
+    unsigned char *significant = NULL;
+    codec_scan_sig_order sig_order;
+    dic_rect_i32 rects[3];
+    int rect_count;
+    dic_status status;
+    int bp_idx;
+
+    if (bitplanes == NULL || plane == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (decode_bitplanes <= 0 || decode_bitplanes > total_bitplane_count)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    status = dic_dwt53_validate_levels(out_width, out_height, max_resolution);
+    if (status != DIC_STATUS_OK) return status;
+
+    if (resolution < 0 || resolution > max_resolution)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    status = codec_scan_resolution_rects(out_width, out_height, max_resolution,
+                                          resolution, rects, &rect_count);
+    if (status != DIC_STATUS_OK) return status;
+
+    plane_count = (size_t)out_width * (size_t)out_height;
+
+    significant = (unsigned char *)calloc(plane_count, 1u);
+    if (significant == NULL) return DIC_STATUS_MEMORY_ERROR;
+
+    codec_scan_sig_order_init(&sig_order);
+
+    for (bp_idx = 0; bp_idx < decode_bitplanes; ++bp_idx)
+    {
+        const codec_scan_bitplane *cur = bitplanes + bp_idx;
+        int bp = decode_bitplanes - 1 - bp_idx;
+        int32_t threshold = (int32_t)(1u << (unsigned)bp);
+        unsigned char *tokens = NULL;
+        size_t token_offset = 0u;
+        size_t sig_before = sig_order.count;
+
+        tokens = (unsigned char *)malloc(cur->dominant_token_count);
+        if (tokens == NULL && cur->dominant_token_count > 0u)
+        {
+            status = DIC_STATUS_MEMORY_ERROR;
+            goto cleanup;
+        }
+        status = codec_scan_huffman_decode(
+            cur->token_freq, &cur->dominant_stream, tokens, cur->dominant_token_count);
+        if (status != DIC_STATUS_OK) { free(tokens); goto cleanup; }
+
+        /* Significance pass */
+        status = codec_scan_decode_significance_pass_nozt(
+            tokens, cur->dominant_token_count, &token_offset,
+            out_width, rects, rect_count,
+            threshold, significant, &sig_order, plane);
+        free(tokens);
+        if (status != DIC_STATUS_OK) goto cleanup;
+
+        /* Refinement pass */
+        if (cur->subordinate_bit_count > 0u)
+        {
+            codec_scan_bit_reader reader;
+            codec_scan_bit_reader_init(&reader, cur->subordinate_bits, cur->subordinate_bit_count);
+            status = codec_scan_decode_refinement_pass(
+                &reader, bp, plane, sig_order.indices, sig_before);
+            if (status != DIC_STATUS_OK) goto cleanup;
+        }
+    }
+
+    /* Midpoint reconstruction when decoding fewer than all bitplanes */
+    if (decode_bitplanes < total_bitplane_count)
+    {
+        int last_decoded_bp = total_bitplane_count - decode_bitplanes;
+
+        if (last_decoded_bp > 0)
+        {
+            int32_t midpoint = (int32_t)(1u << (unsigned)(last_decoded_bp - 1));
+            int r;
+            for (r = 0; r < rect_count; ++r)
+            {
+                const dic_rect_i32 *rect = rects + r;
+                int y;
+                for (y = 0; y < rect->height; ++y)
+                {
+                    int x;
+                    size_t idx;
+                    for (x = 0; x < rect->width; ++x)
+                    {
+                        idx = ((size_t)(rect->y + y) * (size_t)out_width) + (size_t)(rect->x + x);
+                        if (plane[idx] > 0)
+                            plane[idx] += midpoint;
+                        else if (plane[idx] < 0)
+                            plane[idx] -= midpoint;
+                    }
+                }
+            }
+        }
+    }
+
+    status = DIC_STATUS_OK;
+
+cleanup:
+    codec_scan_sig_order_free(&sig_order);
+    free(significant);
+    return status;
 }
 
 dic_status codec_scan_decode_plane(
