@@ -1,70 +1,87 @@
 #pragma once
 /**
  * @file scan.h
- * @brief EZT-style scan-symbol encoding for quantized wavelet planes.
+ * @brief EZW-style per-bitplane zerotree scan for progressive bitplane coding.
+ *
+ * Coefficients are encoded bitplane by bitplane (T = 2^bp) from MSB to LSB.
+ * The number of bitplanes is auto-detected from the maximum coefficient
+ * magnitude.  Each bitplane stores:
+ *   - A significance (dominant) pass with EZT: Huffman-coded IZ / ZTR / POS / NEG
+ *   - A refinement (subordinate) pass: raw packed bits for already-significant
+ *     coefficients
+ *
+ * Progressive decoding is achieved by decoding only the first N bitplanes,
+ * with midpoint reconstruction applied for the first missing bitplane.
  */
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "errors/errors.h"
+#include "hw2/hw2_huffman.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** Symbol kind emitted by the coefficient scanner. */
-typedef enum codec_scan_symbol_kind
+/** Dominant-pass token emitted during the significance pass of each bitplane. */
+typedef enum codec_scan_token
 {
-    /** Single zero coefficient. */
-    DIC_SCAN_SYMBOL_ZERO = 0,
-    /** Embedded zerotree marker covering a zero coefficient and zero descendants. */
-    DIC_SCAN_SYMBOL_EZT = 1,
-    /** Nonzero coefficient with stored amplitude. */
-    DIC_SCAN_SYMBOL_NONZERO = 2
-} codec_scan_symbol_kind;
+    /** Isolated zero — insignificant at T, but at least one descendant is significant. */
+    DIC_SCAN_TOKEN_IZ = 0,
+    /** Zerotree root — insignificant at T, and all descendants are also insignificant. */
+    DIC_SCAN_TOKEN_ZTR = 1,
+    /** Positive significant — |coeff| >= T, sign positive. */
+    DIC_SCAN_TOKEN_POS = 2,
+    /** Negative significant — |coeff| >= T, sign negative. */
+    DIC_SCAN_TOKEN_NEG = 3,
+    /** Number of token kinds (Huffman alphabet size). */
+    DIC_SCAN_TOKEN_COUNT = 4
+} codec_scan_token;
 
-/** One scanned coefficient token. */
-typedef struct codec_scan_symbol
+/** Encoded data for a single bitplane (threshold T = 2^bp). */
+typedef struct codec_scan_bitplane
 {
-    /** Symbol kind from codec_scan_symbol_kind. */
-    unsigned char kind;
-    /** Bit width of amplitude for nonzero symbols, otherwise 0. */
-    unsigned char size;
-    /** Signed coefficient amplitude for nonzero symbols, otherwise 0. */
-    int32_t amplitude;
-} codec_scan_symbol;
-
-/** Growable buffer of scan symbols. */
-typedef struct codec_scan_symbol_buffer
-{
-    /** Allocated symbol storage. */
-    codec_scan_symbol *symbols;
-    /** Number of valid symbols. */
-    size_t count;
-    /** Allocated symbol capacity. */
-    size_t capacity;
-} codec_scan_symbol_buffer;
+    /** Number of dominant-pass tokens emitted at this bitplane. */
+    size_t dominant_token_count;
+    /** Token frequencies (IZ, ZTR, POS, NEG) used to rebuild the Huffman tree. */
+    size_t token_freq[DIC_SCAN_TOKEN_COUNT];
+    /** Huffman-coded dominant-pass token bitstream. */
+    dic_hw2_huffman_bitstream dominant_stream;
+    /** Raw packed refinement bits. */
+    unsigned char *subordinate_bits;
+    /** Number of valid refinement bits (not bytes). */
+    size_t subordinate_bit_count;
+    /** ceil(subordinate_bit_count / 8). */
+    size_t subordinate_byte_count;
+} codec_scan_bitplane;
 
 /**
- * @brief Initializes a scan-symbol buffer to an empty state.
- * @param buffer Buffer to initialize; NULL is ignored.
+ * @brief Initializes a bitplane to an empty state.
+ * @param bp Bitplane to initialize; NULL is ignored.
  */
-void codec_scan_symbol_buffer_init(codec_scan_symbol_buffer *buffer);
+void codec_scan_bitplane_init(codec_scan_bitplane *bp);
 
 /**
- * @brief Frees storage owned by a scan-symbol buffer.
- * @param buffer Buffer to clear; NULL is ignored.
+ * @brief Frees all storage owned by a bitplane.
+ * @param bp Bitplane to clear; NULL is ignored.
  */
-void codec_scan_symbol_buffer_free(codec_scan_symbol_buffer *buffer);
+void codec_scan_bitplane_free(codec_scan_bitplane *bp);
 
 /**
- * @brief Encodes a quantized wavelet coefficient plane into scan symbols.
- * @param plane Quantized coefficient plane in packed subband layout.
- * @param width Plane width.
- * @param height Plane height.
- * @param levels Number of DWT decomposition levels.
- * @param symbols Output symbol buffer; existing contents are freed before use.
+ * @brief Encodes a quantized coefficient plane with per-bitplane EZT.
+ *
+ * The number of bitplanes is auto-detected from max|coefficient|.
+ * If all coefficients are zero, *bitplane_count_out is set to 0 and
+ * *bitplanes_out is set to NULL.
+ *
+ * @param plane      Quantized coefficient plane in packed subband layout.
+ * @param width      Plane width.
+ * @param height     Plane height.
+ * @param levels     Number of DWT decomposition levels.
+ * @param bitplanes_out  Output array of bitplanes (MSB-first); caller frees
+ *                       each with codec_scan_bitplane_free() then frees the array.
+ * @param bitplane_count_out  Number of bitplanes written (0 if all-zero plane).
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
 dic_status codec_scan_encode_plane(
@@ -72,81 +89,32 @@ dic_status codec_scan_encode_plane(
     int width,
     int height,
     int levels,
-    codec_scan_symbol_buffer *symbols
-);
-
-/**
- * @brief Decodes scan symbols back into a quantized wavelet coefficient plane.
- * @param symbols Input symbol stream.
- * @param symbol_count Number of input symbols.
- * @param width Plane width.
- * @param height Plane height.
- * @param levels Number of DWT decomposition levels.
- * @param plane Output coefficient plane in packed subband layout.
- * @return DIC_STATUS_OK on success, otherwise an error status.
- */
-dic_status codec_scan_decode_plane(
-    const codec_scan_symbol *symbols,
-    size_t symbol_count,
-    int width,
-    int height,
-    int levels,
-    int32_t *plane
-);
-
-/**
- * @brief Encodes coefficients in the subbands of one resolution level with
- * per-bitplane significance + refinement passes (no zerotree).
- *
- * Resolution 0 encodes the LL subband only. Resolution r ≥ 1 encodes the
- * three high-pass subbands (HL, LH, HH) at DWT level (levels - r + 1).
- *
- * The number of bitplanes is auto-detected from the maximum coefficient
- * magnitude within the encoded subbands. If all coefficients are zero,
- * *bitplane_count_out is set to 0 and *bitplanes_out is set to NULL.
- *
- * @param plane      Quantized coefficient plane in packed subband layout.
- * @param width      Full plane width.
- * @param height     Full plane height.
- * @param levels     Total DWT decomposition levels.
- * @param resolution Resolution level to encode (0..levels).
- * @param bitplanes_out  Output array of bitplanes (MSB-first).
- * @param bitplane_count_out  Number of bitplanes written.
- * @return DIC_STATUS_OK on success.
- */
-dic_status codec_scan_encode_subbands(
-    const int32_t *plane,
-    int width,
-    int height,
-    int levels,
-    int resolution,
     codec_scan_bitplane **bitplanes_out,
     int *bitplane_count_out);
 
 /**
- * @brief Decodes per-resolution bitplane data and places coefficients into
- * a plane for a max_resolution-level IDWT.
+ * @brief Decodes the first num_bitplanes of per-bitplane EZT data into a
+ * coefficient plane.
  *
- * Midpoint reconstruction is applied when decode_bitplanes < total_bitplane_count.
+ * Midpoint reconstruction is applied when num_bitplanes < total_bitplane_count:
+ * the first missing bitplane contributes 2^(bp-1) to each significant coefficient.
  *
- * @param bitplanes           Array of bitplanes (MSB-first) for this resolution.
- * @param total_bitplane_count  Number of bitplanes available.
- * @param decode_bitplanes    Number of bitplanes to decode (1..total, or total for all).
- * @param out_width           Output plane width (ll_w << max_resolution).
- * @param out_height          Output plane height (ll_h << max_resolution).
- * @param max_resolution      Total resolution levels for the output plane.
- * @param resolution          Which resolution this data represents (0..max_resolution).
- * @param plane               Output coefficient plane (zeroed on entry).
- * @return DIC_STATUS_OK on success.
+ * @param bitplanes             Array of bitplanes (MSB-first).
+ * @param total_bitplane_count  Total number of bitplanes available.
+ * @param num_bitplanes         Number of bitplanes to decode (1..total).
+ * @param width                 Plane width.
+ * @param height                Plane height.
+ * @param levels                Number of DWT decomposition levels.
+ * @param plane                 Output coefficient plane (zeroed on entry).
+ * @return DIC_STATUS_OK on success, otherwise an error status.
  */
-dic_status codec_scan_decode_subbands(
+dic_status codec_scan_decode_plane(
     const codec_scan_bitplane *bitplanes,
     int total_bitplane_count,
-    int decode_bitplanes,
-    int out_width,
-    int out_height,
-    int max_resolution,
-    int resolution,
+    int num_bitplanes,
+    int width,
+    int height,
+    int levels,
     int32_t *plane);
 
 /**

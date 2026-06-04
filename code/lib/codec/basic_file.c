@@ -1,6 +1,6 @@
 /**
  * @file basic_file.c
- * @brief Implements DICW serialization with Huffman-coded scan-symbol tokens.
+ * @brief Implements DICW v2 serialization with per-bitplane Huffman-coded EZW tokens.
  */
 
 #include "codec/basic_file.h"
@@ -12,20 +12,15 @@
 
 #include "hw2/hw2_huffman.h"
 
-enum
-{
-    DIC_BASIC_TOKEN_ZERO = 0,
-    DIC_BASIC_TOKEN_EZT = 1,
-    DIC_BASIC_TOKEN_SIZE_BASE = 2,
-    DIC_BASIC_TOKEN_COUNT = 34
-};
+/* -------------------------------------------------------------------------- */
+/*  Little-endian I/O helpers                                                 */
+/* -------------------------------------------------------------------------- */
 
 static FILE *codec_basic_open_file(const char *path, const char *mode)
 {
     FILE *file = NULL;
 #if defined(_MSC_VER)
-    if (fopen_s(&file, path, mode) != 0)
-        return NULL;
+    if (fopen_s(&file, path, mode) != 0) return NULL;
     return file;
 #else
     return fopen(path, mode);
@@ -35,7 +30,6 @@ static FILE *codec_basic_open_file(const char *path, const char *mode)
 static int codec_basic_write_u32_le(FILE *file, uint32_t value)
 {
     unsigned char bytes[4];
-
     bytes[0] = (unsigned char)(value & 0xffu);
     bytes[1] = (unsigned char)((value >> 8) & 0xffu);
     bytes[2] = (unsigned char)((value >> 16) & 0xffu);
@@ -43,20 +37,11 @@ static int codec_basic_write_u32_le(FILE *file, uint32_t value)
     return fwrite(bytes, 1u, sizeof(bytes), file) == sizeof(bytes);
 }
 
-static int codec_basic_write_i32_le(FILE *file, int32_t value)
-{
-    return codec_basic_write_u32_le(file, (uint32_t)value);
-}
-
 static int codec_basic_read_u32_le(FILE *file, uint32_t *value)
 {
     unsigned char bytes[4];
-
-    if (file == NULL || value == NULL)
-        return 0;
-    if (fread(bytes, 1u, sizeof(bytes), file) != sizeof(bytes))
-        return 0;
-
+    if (file == NULL || value == NULL) return 0;
+    if (fread(bytes, 1u, sizeof(bytes), file) != sizeof(bytes)) return 0;
     *value = (uint32_t)bytes[0]
         | ((uint32_t)bytes[1] << 8)
         | ((uint32_t)bytes[2] << 16)
@@ -64,231 +49,151 @@ static int codec_basic_read_u32_le(FILE *file, uint32_t *value)
     return 1;
 }
 
-static int codec_basic_read_i32_le(FILE *file, int32_t *value)
-{
-    uint32_t raw;
+/* -------------------------------------------------------------------------- */
+/*  Per-bitplane write/read                                                    */
+/* -------------------------------------------------------------------------- */
 
-    if (!codec_basic_read_u32_le(file, &raw))
-        return 0;
-    *value = (int32_t)raw;
-    return 1;
+static dic_status codec_basic_write_bitplane(FILE *file, const codec_scan_bitplane *bp)
+{
+    int k;
+
+    if (!codec_basic_write_u32_le(file, (uint32_t)bp->dominant_token_count))
+        return DIC_STATUS_IO_ERROR;
+
+    for (k = 0; k < DIC_SCAN_TOKEN_COUNT; ++k)
+        if (!codec_basic_write_u32_le(file, (uint32_t)bp->token_freq[k]))
+            return DIC_STATUS_IO_ERROR;
+
+    if (!codec_basic_write_u32_le(file, (uint32_t)bp->dominant_stream.bit_count))
+        return DIC_STATUS_IO_ERROR;
+    if (!codec_basic_write_u32_le(file, (uint32_t)bp->dominant_stream.byte_count))
+        return DIC_STATUS_IO_ERROR;
+    if (bp->dominant_stream.byte_count > 0u) {
+        if (fwrite(bp->dominant_stream.bytes, 1u, bp->dominant_stream.byte_count, file)
+            != bp->dominant_stream.byte_count)
+            return DIC_STATUS_IO_ERROR;
+    }
+
+    if (!codec_basic_write_u32_le(file, (uint32_t)bp->subordinate_bit_count))
+        return DIC_STATUS_IO_ERROR;
+    if (!codec_basic_write_u32_le(file, (uint32_t)bp->subordinate_byte_count))
+        return DIC_STATUS_IO_ERROR;
+    if (bp->subordinate_byte_count > 0u) {
+        if (fwrite(bp->subordinate_bits, 1u, bp->subordinate_byte_count, file)
+            != bp->subordinate_byte_count)
+            return DIC_STATUS_IO_ERROR;
+    }
+
+    /* End-of-bitplane sentinel */
+    if (!codec_basic_write_u32_le(file, DIC_BP_END_MARKER))
+        return DIC_STATUS_IO_ERROR;
+
+    return DIC_STATUS_OK;
 }
 
-static unsigned int codec_basic_map_token(const void *element)
+static dic_status codec_basic_read_bitplane(FILE *file, codec_scan_bitplane *bp)
 {
-    return (unsigned int)(*(const unsigned char *)element);
-}
+    uint32_t u32;
+    int k;
 
-static void codec_basic_write_token(void *element, unsigned int symbol)
-{
-    *(unsigned char *)element = (unsigned char)symbol;
-}
+    codec_scan_bitplane_init(bp);
 
-static dic_status codec_basic_symbols_to_tokens(
-    const codec_scan_symbol *symbols,
-    size_t symbol_count,
-    unsigned char **tokens_out,
-    size_t counts[DIC_BASIC_TOKEN_COUNT],
-    size_t *amplitude_count_out
-)
-{
-    unsigned char *tokens = NULL;
-    size_t amplitude_count = 0u;
-    size_t i;
+    if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
+    bp->dominant_token_count = (size_t)u32;
 
-    if (symbols == NULL || tokens_out == NULL || counts == NULL || amplitude_count_out == NULL)
-        return DIC_STATUS_INVALID_ARGUMENT;
+    for (k = 0; k < DIC_SCAN_TOKEN_COUNT; ++k) {
+        if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
+        bp->token_freq[k] = (size_t)u32;
+    }
 
-    tokens = (unsigned char *)malloc(symbol_count);
-    if (tokens == NULL && symbol_count > 0u)
-        return DIC_STATUS_MEMORY_ERROR;
+    if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
+    bp->dominant_stream.bit_count = (size_t)u32;
+    if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
+    bp->dominant_stream.byte_count = (size_t)u32;
 
-    memset(counts, 0, DIC_BASIC_TOKEN_COUNT * sizeof(counts[0]));
-    for (i = 0; i < symbol_count; ++i)
-    {
-        unsigned char token;
-
-        if (symbols[i].kind == DIC_SCAN_SYMBOL_ZERO)
-        {
-            if (symbols[i].amplitude != 0 || symbols[i].size != 0u)
-            {
-                free(tokens);
-                return DIC_HW4_FORMAT_ERROR;
-            }
-            token = (unsigned char)DIC_BASIC_TOKEN_ZERO;
-        }
-        else if (symbols[i].kind == DIC_SCAN_SYMBOL_EZT)
-        {
-            if (symbols[i].amplitude != 0 || symbols[i].size != 0u)
-            {
-                free(tokens);
-                return DIC_HW4_FORMAT_ERROR;
-            }
-            token = (unsigned char)DIC_BASIC_TOKEN_EZT;
-        }
-        else if (symbols[i].kind == DIC_SCAN_SYMBOL_NONZERO)
-        {
-            if (symbols[i].amplitude == 0
-                || symbols[i].size == 0u
-                || symbols[i].size > 32u
-                || symbols[i].size != codec_scan_amplitude_size(symbols[i].amplitude))
-            {
-                free(tokens);
-                return DIC_HW4_FORMAT_ERROR;
-            }
-            token = (unsigned char)(DIC_BASIC_TOKEN_SIZE_BASE + symbols[i].size - 1u);
-            ++amplitude_count;
-        }
-        else
-        {
-            free(tokens);
+    if (bp->dominant_stream.byte_count > 0u) {
+        bp->dominant_stream.bytes = (unsigned char *)malloc(bp->dominant_stream.byte_count);
+        if (bp->dominant_stream.bytes == NULL) return DIC_STATUS_MEMORY_ERROR;
+        if (fread(bp->dominant_stream.bytes, 1u, bp->dominant_stream.byte_count, file)
+            != bp->dominant_stream.byte_count) {
+            dic_hw2_huffman_bitstream_free(&bp->dominant_stream);
             return DIC_HW4_FORMAT_ERROR;
         }
-
-        tokens[i] = token;
-        ++counts[token];
     }
 
-    *tokens_out = tokens;
-    *amplitude_count_out = amplitude_count;
-    return DIC_STATUS_OK;
-}
-
-static dic_status codec_basic_write_channel(
-    FILE *file,
-    const codec_basic_channel_stream *stream
-)
-{
-    size_t counts[DIC_BASIC_TOKEN_COUNT];
-    unsigned char *tokens = NULL;
-    size_t amplitude_count = 0u;
-    dic_hw2_huffman_tree tree;
-    dic_hw2_huffman_bitstream bitstream;
-    dic_status status;
-    size_t i;
-
-    if (file == NULL || stream == NULL || stream->symbols == NULL)
-        return DIC_STATUS_INVALID_ARGUMENT;
-    if (stream->symbol_count > (size_t)UINT32_MAX)
-        return DIC_HW4_FORMAT_ERROR;
-
-    dic_hw2_huffman_tree_init(&tree);
-    dic_hw2_huffman_bitstream_init(&bitstream);
-
-    status = codec_basic_symbols_to_tokens(
-        stream->symbols,
-        stream->symbol_count,
-        &tokens,
-        counts,
-        &amplitude_count
-    );
-    if (status != DIC_STATUS_OK)
-        return status;
-    if (amplitude_count > (size_t)UINT32_MAX)
-    {
-        free(tokens);
+    if (!codec_basic_read_u32_le(file, &u32)) {
+        dic_hw2_huffman_bitstream_free(&bp->dominant_stream);
         return DIC_HW4_FORMAT_ERROR;
     }
-
-    status = dic_hw2_huffman_build_from_counts(counts, DIC_BASIC_TOKEN_COUNT, &tree);
-    if (status == DIC_STATUS_OK)
-    {
-        status = dic_hw2_huffman_encode_mapped(
-            &tree,
-            tokens,
-            stream->symbol_count,
-            sizeof(tokens[0]),
-            codec_basic_map_token,
-            &bitstream
-        );
-    }
-    free(tokens);
-
-    if (status != DIC_STATUS_OK)
-    {
-        dic_hw2_huffman_tree_free(&tree);
-        return status;
-    }
-    if (bitstream.bit_count > (size_t)UINT32_MAX)
-    {
-        dic_hw2_huffman_tree_free(&tree);
-        dic_hw2_huffman_bitstream_free(&bitstream);
+    bp->subordinate_bit_count = (size_t)u32;
+    if (!codec_basic_read_u32_le(file, &u32)) {
+        dic_hw2_huffman_bitstream_free(&bp->dominant_stream);
         return DIC_HW4_FORMAT_ERROR;
     }
+    bp->subordinate_byte_count = (size_t)u32;
 
-    if (!codec_basic_write_u32_le(file, (uint32_t)stream->symbol_count)
-        || !codec_basic_write_u32_le(file, (uint32_t)amplitude_count))
-    {
-        dic_hw2_huffman_tree_free(&tree);
-        dic_hw2_huffman_bitstream_free(&bitstream);
-        return DIC_STATUS_IO_ERROR;
-    }
-
-    for (i = 0; i < DIC_BASIC_TOKEN_COUNT; ++i)
-    {
-        if (counts[i] > (size_t)UINT32_MAX
-            || !codec_basic_write_u32_le(file, (uint32_t)counts[i]))
-        {
-            dic_hw2_huffman_tree_free(&tree);
-            dic_hw2_huffman_bitstream_free(&bitstream);
-            return DIC_STATUS_IO_ERROR;
+    if (bp->subordinate_byte_count > 0u) {
+        bp->subordinate_bits = (unsigned char *)malloc(bp->subordinate_byte_count);
+        if (bp->subordinate_bits == NULL) {
+            dic_hw2_huffman_bitstream_free(&bp->dominant_stream);
+            return DIC_STATUS_MEMORY_ERROR;
+        }
+        if (fread(bp->subordinate_bits, 1u, bp->subordinate_byte_count, file)
+            != bp->subordinate_byte_count) {
+            free(bp->subordinate_bits);
+            dic_hw2_huffman_bitstream_free(&bp->dominant_stream);
+            return DIC_HW4_FORMAT_ERROR;
         }
     }
 
-    if (!codec_basic_write_u32_le(file, (uint32_t)bitstream.bit_count)
-        || (bitstream.byte_count > 0u
-            && fwrite(bitstream.bytes, 1u, bitstream.byte_count, file) != bitstream.byte_count))
-    {
-        dic_hw2_huffman_tree_free(&tree);
-        dic_hw2_huffman_bitstream_free(&bitstream);
-        return DIC_STATUS_IO_ERROR;
+    /* Verify end-of-bitplane sentinel */
+    if (!codec_basic_read_u32_le(file, &u32) || u32 != DIC_BP_END_MARKER) {
+        dic_hw2_huffman_bitstream_free(&bp->dominant_stream);
+        free(bp->subordinate_bits);
+        return DIC_HW4_FORMAT_ERROR;
     }
 
-    for (i = 0; i < stream->symbol_count; ++i)
-    {
-        if (stream->symbols[i].kind != DIC_SCAN_SYMBOL_NONZERO)
-            continue;
-        if (!codec_basic_write_i32_le(file, stream->symbols[i].amplitude))
-        {
-            dic_hw2_huffman_tree_free(&tree);
-            dic_hw2_huffman_bitstream_free(&bitstream);
-            return DIC_STATUS_IO_ERROR;
-        }
-    }
-
-    dic_hw2_huffman_tree_free(&tree);
-    dic_hw2_huffman_bitstream_free(&bitstream);
     return DIC_STATUS_OK;
 }
 
-dic_status codec_basic_write_file(
-    const char *path,
-    const codec_basic_encoded_image *encoded
-)
+static dic_status codec_basic_skip_bitplane(FILE *file)
 {
-    FILE *file = NULL;
-    dic_status status;
+    uint32_t u32, byte_count;
+    int k;
 
-    if (path == NULL || encoded == NULL || encoded->channel_streams == NULL)
-        return DIC_STATUS_INVALID_ARGUMENT;
+    /* dominant_token_count + token_freq[4] */
+    for (k = 0; k < 5; ++k)
+        if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
 
-    file = codec_basic_open_file(path, "wb");
-    if (file == NULL)
-        return DIC_STATUS_IO_ERROR;
+    /* dominant bit_count, byte_count */
+    if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
+    if (!codec_basic_read_u32_le(file, &byte_count)) return DIC_HW4_FORMAT_ERROR;
+    if (byte_count > 0u) {
+        if (fseek(file, (long)byte_count, SEEK_CUR) != 0) return DIC_STATUS_IO_ERROR;
+    }
 
-    status = codec_basic_write_stream(file, encoded);
-    if (fclose(file) != 0 && status == DIC_STATUS_OK)
-        status = DIC_STATUS_IO_ERROR;
-    return status;
+    /* subordinate bit_count, byte_count */
+    if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
+    if (!codec_basic_read_u32_le(file, &byte_count)) return DIC_HW4_FORMAT_ERROR;
+    if (byte_count > 0u) {
+        if (fseek(file, (long)byte_count, SEEK_CUR) != 0) return DIC_STATUS_IO_ERROR;
+    }
+
+    /* Skip end-of-bitplane sentinel */
+    if (!codec_basic_read_u32_le(file, &u32) || u32 != DIC_BP_END_MARKER)
+        return DIC_HW4_FORMAT_ERROR;
+
+    return DIC_STATUS_OK;
 }
 
-dic_status codec_basic_write_stream(
-    FILE *file,
-    const codec_basic_encoded_image *encoded
-)
+/* -------------------------------------------------------------------------- */
+/*  Write                                                                     */
+/* -------------------------------------------------------------------------- */
+
+dic_status codec_basic_write_stream(FILE *file, const codec_basic_encoded_image *encoded)
 {
     dic_status status = DIC_STATUS_OK;
-    int channel;
+    int channel, bp;
 
     if (file == NULL || encoded == NULL || encoded->channel_streams == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
@@ -299,273 +204,55 @@ dic_status codec_basic_write_stream(
     if (encoded->levels <= 0 || encoded->quant_step <= 0)
         return DIC_STATUS_INVALID_ARGUMENT;
 
+    /* Header */
     if (fwrite(DIC_BASIC_FILE_MAGIC, 1u, 4u, file) != 4u
         || !codec_basic_write_u32_le(file, DIC_BASIC_FILE_VERSION)
         || !codec_basic_write_u32_le(file, (uint32_t)encoded->width)
         || !codec_basic_write_u32_le(file, (uint32_t)encoded->height)
         || !codec_basic_write_u32_le(file, (uint32_t)encoded->channels)
         || !codec_basic_write_u32_le(file, (uint32_t)encoded->levels)
-        || !codec_basic_write_u32_le(file, (uint32_t)encoded->quant_step))
+        || !codec_basic_write_u32_le(file, (uint32_t)encoded->quant_step)
+        || !codec_basic_write_u32_le(file, (uint32_t)encoded->num_bitplanes))
     {
         return DIC_STATUS_IO_ERROR;
     }
 
-    for (channel = 0; channel < encoded->channels; ++channel)
-    {
-        status = codec_basic_write_channel(file, encoded->channel_streams + channel);
-        if (status != DIC_STATUS_OK)
-            break;
+    for (channel = 0; channel < encoded->channels; ++channel) {
+        const codec_basic_channel_stream *stream = encoded->channel_streams + channel;
+        for (bp = 0; bp < stream->num_bitplanes; ++bp) {
+            status = codec_basic_write_bitplane(file, stream->bitplanes + bp);
+            if (status != DIC_STATUS_OK) return status;
+        }
     }
 
-    return status;
-}
-
-static dic_status codec_basic_rebuild_symbols(
-    const unsigned char *tokens,
-    size_t token_count,
-    const int32_t *amplitudes,
-    size_t amplitude_count,
-    codec_scan_symbol **symbols_out
-)
-{
-    codec_scan_symbol *symbols = NULL;
-    size_t amplitude_offset = 0u;
-    size_t i;
-
-    if (tokens == NULL || symbols_out == NULL)
-        return DIC_STATUS_INVALID_ARGUMENT;
-    if (amplitudes == NULL && amplitude_count > 0u)
-        return DIC_STATUS_INVALID_ARGUMENT;
-
-    symbols = (codec_scan_symbol *)calloc(token_count, sizeof(symbols[0]));
-    if (symbols == NULL && token_count > 0u)
-        return DIC_STATUS_MEMORY_ERROR;
-
-    for (i = 0; i < token_count; ++i)
-    {
-        unsigned char token = tokens[i];
-
-        if (token == DIC_BASIC_TOKEN_ZERO)
-        {
-            symbols[i].kind = DIC_SCAN_SYMBOL_ZERO;
-            continue;
-        }
-
-        if (token == DIC_BASIC_TOKEN_EZT)
-        {
-            symbols[i].kind = DIC_SCAN_SYMBOL_EZT;
-            continue;
-        }
-
-        if (token >= DIC_BASIC_TOKEN_SIZE_BASE && token < DIC_BASIC_TOKEN_COUNT)
-        {
-            int32_t amplitude;
-
-            if (amplitude_offset >= amplitude_count)
-            {
-                free(symbols);
-                return DIC_HW4_FORMAT_ERROR;
-            }
-
-            amplitude = amplitudes[amplitude_offset];
-            ++amplitude_offset;
-            symbols[i].kind = DIC_SCAN_SYMBOL_NONZERO;
-            symbols[i].size = (unsigned char)(token - DIC_BASIC_TOKEN_SIZE_BASE + 1u);
-            symbols[i].amplitude = amplitude;
-            if (amplitude == 0 || symbols[i].size != codec_scan_amplitude_size(amplitude))
-            {
-                free(symbols);
-                return DIC_HW4_FORMAT_ERROR;
-            }
-            continue;
-        }
-
-        free(symbols);
-        return DIC_HW4_FORMAT_ERROR;
-    }
-
-    if (amplitude_offset != amplitude_count)
-    {
-        free(symbols);
-        return DIC_HW4_FORMAT_ERROR;
-    }
-
-    *symbols_out = symbols;
     return DIC_STATUS_OK;
 }
 
-static dic_status codec_basic_read_channel(
-    FILE *file,
-    codec_basic_channel_stream *stream
-)
-{
-    uint32_t symbol_count_u32;
-    uint32_t amplitude_count_u32;
-    uint32_t bit_count_u32;
-    size_t counts[DIC_BASIC_TOKEN_COUNT];
-    size_t expected_symbol_count = 0u;
-    size_t symbol_count;
-    size_t amplitude_count;
-    size_t bit_byte_count;
-    unsigned char *tokens = NULL;
-    int32_t *amplitudes = NULL;
-    dic_hw2_huffman_tree tree;
-    dic_hw2_huffman_bitstream bitstream;
-    dic_status status = DIC_STATUS_OK;
-    size_t i;
-
-    if (file == NULL || stream == NULL)
-        return DIC_STATUS_INVALID_ARGUMENT;
-
-    if (!codec_basic_read_u32_le(file, &symbol_count_u32)
-        || !codec_basic_read_u32_le(file, &amplitude_count_u32))
-    {
-        return DIC_HW4_FORMAT_ERROR;
-    }
-
-    symbol_count = (size_t)symbol_count_u32;
-    amplitude_count = (size_t)amplitude_count_u32;
-
-    for (i = 0; i < DIC_BASIC_TOKEN_COUNT; ++i)
-    {
-        uint32_t count_u32;
-
-        if (!codec_basic_read_u32_le(file, &count_u32))
-            return DIC_HW4_FORMAT_ERROR;
-        counts[i] = (size_t)count_u32;
-        expected_symbol_count += counts[i];
-    }
-
-    if (expected_symbol_count != symbol_count)
-        return DIC_HW4_FORMAT_ERROR;
-
-    if (!codec_basic_read_u32_le(file, &bit_count_u32))
-        return DIC_HW4_FORMAT_ERROR;
-
-    bit_byte_count = ((size_t)bit_count_u32 + 7u) / 8u;
-    dic_hw2_huffman_tree_init(&tree);
-    dic_hw2_huffman_bitstream_init(&bitstream);
-
-    if (bit_byte_count > 0u)
-    {
-        bitstream.bytes = (unsigned char *)malloc(bit_byte_count);
-        if (bitstream.bytes == NULL)
-            return DIC_STATUS_MEMORY_ERROR;
-        if (fread(bitstream.bytes, 1u, bit_byte_count, file) != bit_byte_count)
-        {
-            dic_hw2_huffman_bitstream_free(&bitstream);
-            return DIC_HW4_FORMAT_ERROR;
-        }
-    }
-    bitstream.byte_count = bit_byte_count;
-    bitstream.bit_count = (size_t)bit_count_u32;
-
-    tokens = (unsigned char *)malloc(symbol_count);
-    if (tokens == NULL && symbol_count > 0u)
-    {
-        dic_hw2_huffman_bitstream_free(&bitstream);
-        return DIC_STATUS_MEMORY_ERROR;
-    }
-
-    status = dic_hw2_huffman_build_from_counts(counts, DIC_BASIC_TOKEN_COUNT, &tree);
-    if (status == DIC_STATUS_OK)
-    {
-        status = dic_hw2_huffman_decode_mapped(
-            &tree,
-            &bitstream,
-            symbol_count,
-            tokens,
-            sizeof(tokens[0]),
-            codec_basic_write_token
-        );
-    }
-
-    dic_hw2_huffman_tree_free(&tree);
-    dic_hw2_huffman_bitstream_free(&bitstream);
-    if (status != DIC_STATUS_OK)
-    {
-        free(tokens);
-        return status == DIC_HW2_HUFFMAN_MALFORMED_BITSTREAM ? DIC_HW4_FORMAT_ERROR : status;
-    }
-
-    amplitudes = amplitude_count > 0u
-        ? (int32_t *)malloc(amplitude_count * sizeof(amplitudes[0]))
-        : NULL;
-    if (amplitudes == NULL && amplitude_count > 0u)
-    {
-        free(tokens);
-        return DIC_STATUS_MEMORY_ERROR;
-    }
-
-    for (i = 0; i < amplitude_count; ++i)
-    {
-        if (!codec_basic_read_i32_le(file, amplitudes + i))
-        {
-            free(tokens);
-            free(amplitudes);
-            return DIC_HW4_FORMAT_ERROR;
-        }
-    }
-
-    status = codec_basic_rebuild_symbols(
-        tokens,
-        symbol_count,
-        amplitudes,
-        amplitude_count,
-        &stream->symbols
-    );
-    if (status == DIC_STATUS_OK)
-        stream->symbol_count = symbol_count;
-
-    free(tokens);
-    free(amplitudes);
-    return status;
-}
-
-dic_status codec_basic_read_file(
-    const char *path,
-    codec_basic_encoded_image *encoded
-)
+dic_status codec_basic_write_file(const char *path, const codec_basic_encoded_image *encoded)
 {
     FILE *file = NULL;
     dic_status status;
 
-    if (path == NULL || encoded == NULL)
+    if (path == NULL || encoded == NULL || encoded->channel_streams == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    file = codec_basic_open_file(path, "rb");
-    if (file == NULL)
-        return DIC_STATUS_FILE_OPEN_ERROR;
+    file = codec_basic_open_file(path, "wb");
+    if (file == NULL) return DIC_STATUS_IO_ERROR;
 
-    status = codec_basic_read_stream(file, encoded);
-    if (status == DIC_STATUS_OK && fgetc(file) != EOF)
-        status = DIC_HW4_FORMAT_ERROR;
-
-    fclose(file);
-    if (status != DIC_STATUS_OK)
-        codec_basic_encoded_free(encoded);
+    status = codec_basic_write_stream(file, encoded);
+    if (fclose(file) != 0 && status == DIC_STATUS_OK) status = DIC_STATUS_IO_ERROR;
     return status;
 }
 
-dic_status codec_basic_read_stream(
-    FILE *file,
-    codec_basic_encoded_image *encoded
-)
+/* -------------------------------------------------------------------------- */
+/*  Read (full)                                                               */
+/* -------------------------------------------------------------------------- */
+
+static dic_status codec_basic_read_header(
+    FILE *file, codec_basic_encoded_image *encoded, uint32_t *num_bp_out)
 {
     char magic[4];
-    uint32_t version;
-    uint32_t width;
-    uint32_t height;
-    uint32_t channels;
-    uint32_t levels;
-    uint32_t quant_step;
-    dic_status status = DIC_STATUS_OK;
-    int channel;
-
-    if (file == NULL || encoded == NULL)
-        return DIC_STATUS_INVALID_ARGUMENT;
-
-    codec_basic_encoded_free(encoded);
+    uint32_t version, width, height, channels, levels, quant_step, num_bp;
 
     if (fread(magic, 1u, sizeof(magic), file) != sizeof(magic)
         || memcmp(magic, DIC_BASIC_FILE_MAGIC, sizeof(magic)) != 0
@@ -574,40 +261,161 @@ dic_status codec_basic_read_stream(
         || !codec_basic_read_u32_le(file, &height)
         || !codec_basic_read_u32_le(file, &channels)
         || !codec_basic_read_u32_le(file, &levels)
-        || !codec_basic_read_u32_le(file, &quant_step))
+        || !codec_basic_read_u32_le(file, &quant_step)
+        || !codec_basic_read_u32_le(file, &num_bp))
     {
         return DIC_HW4_FORMAT_ERROR;
     }
 
     if (version != DIC_BASIC_FILE_VERSION
         || (channels != 1u && channels != 3u)
-        || levels == 0u
-        || quant_step == 0u)
+        || levels == 0u || quant_step == 0u)
     {
         return DIC_HW4_FORMAT_ERROR;
     }
-
-    encoded->channel_streams = (codec_basic_channel_stream *)calloc(
-        (size_t)channels,
-        sizeof(encoded->channel_streams[0])
-    );
-    if (encoded->channel_streams == NULL)
-        return DIC_STATUS_MEMORY_ERROR;
 
     encoded->width = (int)width;
     encoded->height = (int)height;
     encoded->channels = (int)channels;
     encoded->levels = (int)levels;
     encoded->quant_step = (int)quant_step;
+    *num_bp_out = num_bp;
+    return DIC_STATUS_OK;
+}
 
-    for (channel = 0; channel < encoded->channels; ++channel)
-    {
-        status = codec_basic_read_channel(file, encoded->channel_streams + channel);
-        if (status != DIC_STATUS_OK)
-            break;
+dic_status codec_basic_read_stream(FILE *file, codec_basic_encoded_image *encoded)
+{
+    uint32_t total_bp;
+    dic_status status;
+    int channel, bp;
+
+    if (file == NULL || encoded == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    codec_basic_encoded_free(encoded);
+
+    status = codec_basic_read_header(file, encoded, &total_bp);
+    if (status != DIC_STATUS_OK) return status;
+
+    encoded->num_bitplanes = (int)total_bp;
+
+    encoded->channel_streams = (codec_basic_channel_stream *)calloc(
+        (size_t)encoded->channels, sizeof(encoded->channel_streams[0]));
+    if (encoded->channel_streams == NULL) return DIC_STATUS_MEMORY_ERROR;
+
+    for (channel = 0; channel < encoded->channels; ++channel) {
+        codec_basic_channel_stream *stream = encoded->channel_streams + channel;
+        stream->num_bitplanes = (int)total_bp;
+        stream->bitplanes = (codec_scan_bitplane *)calloc(
+            (size_t)total_bp, sizeof(stream->bitplanes[0]));
+        if (stream->bitplanes == NULL) {
+            codec_basic_encoded_free(encoded);
+            return DIC_STATUS_MEMORY_ERROR;
+        }
+        for (bp = 0; bp < (int)total_bp; ++bp) {
+            status = codec_basic_read_bitplane(file, stream->bitplanes + bp);
+            if (status != DIC_STATUS_OK) {
+                codec_basic_encoded_free(encoded);
+                return status;
+            }
+        }
     }
 
-    if (status != DIC_STATUS_OK)
-        codec_basic_encoded_free(encoded);
+    return DIC_STATUS_OK;
+}
+
+dic_status codec_basic_read_file(const char *path, codec_basic_encoded_image *encoded)
+{
+    FILE *file = NULL;
+    dic_status status;
+
+    if (path == NULL || encoded == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    file = codec_basic_open_file(path, "rb");
+    if (file == NULL) return DIC_STATUS_FILE_OPEN_ERROR;
+
+    status = codec_basic_read_stream(file, encoded);
+    fclose(file);
+    if (status != DIC_STATUS_OK) codec_basic_encoded_free(encoded);
+    return status;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Read (progressive — first num_bitplanes only)                              */
+/* -------------------------------------------------------------------------- */
+
+dic_status codec_basic_read_stream_bitplanes(
+    FILE *file, int num_bitplanes, codec_basic_encoded_image *encoded)
+{
+    uint32_t total_bp;
+    dic_status status;
+    int channel, bp;
+
+    if (file == NULL || encoded == NULL || num_bitplanes <= 0)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    codec_basic_encoded_free(encoded);
+
+    status = codec_basic_read_header(file, encoded, &total_bp);
+    if (status != DIC_STATUS_OK) return status;
+
+    if (num_bitplanes > (int)total_bp) {
+        return DIC_HW4_FORMAT_ERROR;
+    }
+
+    encoded->num_bitplanes = num_bitplanes;
+
+    encoded->channel_streams = (codec_basic_channel_stream *)calloc(
+        (size_t)encoded->channels, sizeof(encoded->channel_streams[0]));
+    if (encoded->channel_streams == NULL) return DIC_STATUS_MEMORY_ERROR;
+
+    for (channel = 0; channel < encoded->channels; ++channel) {
+        codec_basic_channel_stream *stream = encoded->channel_streams + channel;
+        stream->num_bitplanes = num_bitplanes;
+        stream->bitplanes = (codec_scan_bitplane *)calloc(
+            (size_t)num_bitplanes, sizeof(stream->bitplanes[0]));
+        if (stream->bitplanes == NULL) {
+            codec_basic_encoded_free(encoded);
+            return DIC_STATUS_MEMORY_ERROR;
+        }
+
+        /* Read the requested bitplanes */
+        for (bp = 0; bp < num_bitplanes; ++bp) {
+            status = codec_basic_read_bitplane(file, stream->bitplanes + bp);
+            if (status != DIC_STATUS_OK) {
+                codec_basic_encoded_free(encoded);
+                return status;
+            }
+        }
+
+        /* Skip remaining bitplanes for this channel */
+        for (bp = num_bitplanes; bp < (int)total_bp; ++bp) {
+            status = codec_basic_skip_bitplane(file);
+            if (status != DIC_STATUS_OK) {
+                codec_basic_encoded_free(encoded);
+                return status;
+            }
+        }
+    }
+
+    return DIC_STATUS_OK;
+}
+
+dic_status codec_basic_read_file_bitplanes(
+    const char *path, int num_bitplanes, codec_basic_encoded_image *encoded)
+{
+    FILE *file = NULL;
+    dic_status status;
+
+    if (path == NULL || encoded == NULL || num_bitplanes <= 0)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    file = codec_basic_open_file(path, "rb");
+    if (file == NULL) return DIC_STATUS_FILE_OPEN_ERROR;
+
+    status = codec_basic_read_stream_bitplanes(file, num_bitplanes, encoded);
+    fclose(file);
+    if (status != DIC_STATUS_OK) codec_basic_encoded_free(encoded);
     return status;
 }

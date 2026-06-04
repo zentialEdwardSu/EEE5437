@@ -22,6 +22,8 @@ extern "C" {
     X(DIC_HW4_INVALID_LEVELS, 5004, "invalid wavelet decomposition level count") \
     X(DIC_HW4_INVALID_QUALITY, 5005, "quality must be in the range [1, 100]")   \
     X(DIC_HW4_FORMAT_ERROR, 5008, "invalid .dic53 file format") \
+    X(DIC_CODEC_TOO_MANY_LAYERS, 5009, "too many quality layers") \
+    X(DIC_CODEC_ZERO_THRESHOLDS, 5010, "no thresholds to encode") \
     X(DIC_J2K_INVALID_DIMENSIONS, 6001, "invalid JPEG 2000 image dimensions") \
     X(DIC_J2K_INVALID_COMPONENTS, 6002, "invalid JPEG 2000 component count") \
     X(DIC_J2K_INVALID_LEVELS, 6003, "invalid JPEG 2000 decomposition level count") \

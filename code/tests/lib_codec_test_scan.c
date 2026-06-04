@@ -7,7 +7,8 @@ int main(void)
 {
     int32_t plane[8 * 8];
     int32_t reconstructed[8 * 8];
-    codec_scan_symbol_buffer symbols = {0};
+    codec_scan_bitplane *bitplanes = NULL;
+    int bp_count = 0;
     int i;
     int ezt_seen = 0;
 
@@ -19,18 +20,28 @@ int main(void)
     plane[16] = 11;
     plane[63] = 2;
 
-    DIC_EXPECT(codec_scan_encode_plane(plane, 8, 8, 3, &symbols) == DIC_STATUS_OK);
-    DIC_EXPECT(symbols.count > 0u);
-    for (i = 0; i < (int)symbols.count; ++i)
-    {
-        if (symbols.symbols[i].kind == DIC_SCAN_SYMBOL_EZT)
+    DIC_EXPECT(codec_scan_encode_plane(plane, 8, 8, 3, &bitplanes, &bp_count) == DIC_STATUS_OK);
+    DIC_EXPECT(bp_count > 0);
+
+    for (i = 0; i < bp_count && !ezt_seen; ++i) {
+        if (bitplanes[i].token_freq[DIC_SCAN_TOKEN_ZTR] > 0u)
             ezt_seen = 1;
     }
     DIC_EXPECT(ezt_seen);
 
-    DIC_EXPECT(codec_scan_decode_plane(symbols.symbols, symbols.count, 8, 8, 3, reconstructed) == DIC_STATUS_OK);
+    /* Full decode */
+    DIC_EXPECT(codec_scan_decode_plane(bitplanes, bp_count, bp_count, 8, 8, 3, reconstructed) == DIC_STATUS_OK);
     DIC_EXPECT(memcmp(plane, reconstructed, sizeof(plane)) == 0);
 
-    codec_scan_symbol_buffer_free(&symbols);
+    /* Progressive decode: 1 bitplane */
+    {
+        int32_t partial[8 * 8];
+        memset(partial, 0, sizeof(partial));
+        DIC_EXPECT(codec_scan_decode_plane(bitplanes, bp_count, 1, 8, 8, 3, partial) == DIC_STATUS_OK);
+    }
+
+    for (i = 0; i < bp_count; ++i)
+        codec_scan_bitplane_free(bitplanes + i);
+    free(bitplanes);
     return 0;
 }

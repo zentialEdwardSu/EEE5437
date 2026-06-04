@@ -9,7 +9,7 @@ extern "C" {
 #define FINALPROJ_RECON_RGB_PATH "image_recon.ppm"
 #define FINALPROJ_LEVELS 5
 
-/** Encodes the assignment basic codec bitstream and returns bitrate in bits per pixel. */
+/** Encodes the assignment basic codec bitstream with progressive bitplane coding and returns bitrate in bits per pixel. */
 double imageEncoder(const char *orgImageFileName, int quantizationStepSize);
 
 /** Decodes the assignment basic codec bitstream and returns PSNR against the original image. */
