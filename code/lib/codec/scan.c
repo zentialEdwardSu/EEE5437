@@ -1054,7 +1054,7 @@ dic_status codec_scan_decode_subbands(
     for (bp_idx = 0; bp_idx < decode_bitplanes; ++bp_idx)
     {
         const codec_scan_bitplane *cur = bitplanes + bp_idx;
-        int bp = decode_bitplanes - 1 - bp_idx;
+        int bp = total_bitplane_count - 1 - bp_idx;
         int32_t threshold = (int32_t)(1u << (unsigned)bp);
         unsigned char *tokens = NULL;
         size_t token_offset = 0u;
@@ -1161,7 +1161,7 @@ dic_status codec_scan_decode_plane(
          * We compute threshold from bp_idx and global max_bp: since we no longer
          * store max_bp explicitly in the bitplane struct, we compute it from
          * the total count. */
-        int bp = num_bitplanes - 1 - bp_idx; /* MSB=num_bitplanes-1, LSB=0 */
+        int bp = total_bitplane_count - 1 - bp_idx;
         int32_t threshold = (int32_t)(1u << (unsigned)bp);
         unsigned char *tokens = NULL;
         unsigned char *visited = NULL;
