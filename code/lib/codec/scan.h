@@ -133,9 +133,11 @@ dic_status codec_scan_decode_plane(
  * @param height     Full plane height.
  * @param levels     Total DWT decomposition levels.
  * @param resolution Resolution level to encode (0..levels).
- * @param bitplanes_out  Output array of bitplanes (MSB-first).
+ * @param bitplanes_out  Output array of bitplanes (MSB-first); caller must
+ *                       free each with codec_scan_bitplane_free(), then free
+ *                       the array.
  * @param bitplane_count_out  Number of bitplanes written.
- * @return DIC_STATUS_OK on success.
+ * @return DIC_STATUS_OK on success, otherwise an error status.
  */
 dic_status codec_scan_encode_subbands(
     const int32_t *plane,
@@ -160,7 +162,7 @@ dic_status codec_scan_encode_subbands(
  * @param max_resolution      Total resolution levels for the output plane.
  * @param resolution          Which resolution this data represents (0..max_resolution).
  * @param plane               Output coefficient plane (zeroed on entry).
- * @return DIC_STATUS_OK on success.
+ * @return DIC_STATUS_OK on success, otherwise an error status.
  */
 dic_status codec_scan_decode_subbands(
     const codec_scan_bitplane *bitplanes,
