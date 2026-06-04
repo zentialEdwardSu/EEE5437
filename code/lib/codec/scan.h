@@ -118,6 +118,61 @@ dic_status codec_scan_decode_plane(
     int32_t *plane);
 
 /**
+ * @brief Encodes coefficients in the subbands of one resolution level with
+ * per-bitplane significance + refinement passes (no zerotree).
+ *
+ * Resolution 0 encodes the LL subband only. Resolution r ≥ 1 encodes the
+ * three high-pass subbands (HL, LH, HH) at DWT level (levels - r + 1).
+ *
+ * The number of bitplanes is auto-detected from the maximum coefficient
+ * magnitude within the encoded subbands. If all coefficients are zero,
+ * *bitplane_count_out is set to 0 and *bitplanes_out is set to NULL.
+ *
+ * @param plane      Quantized coefficient plane in packed subband layout.
+ * @param width      Full plane width.
+ * @param height     Full plane height.
+ * @param levels     Total DWT decomposition levels.
+ * @param resolution Resolution level to encode (0..levels).
+ * @param bitplanes_out  Output array of bitplanes (MSB-first).
+ * @param bitplane_count_out  Number of bitplanes written.
+ * @return DIC_STATUS_OK on success.
+ */
+dic_status codec_scan_encode_subbands(
+    const int32_t *plane,
+    int width,
+    int height,
+    int levels,
+    int resolution,
+    codec_scan_bitplane **bitplanes_out,
+    int *bitplane_count_out);
+
+/**
+ * @brief Decodes per-resolution bitplane data and places coefficients into
+ * a plane for a max_resolution-level IDWT.
+ *
+ * Midpoint reconstruction is applied when decode_bitplanes < total_bitplane_count.
+ *
+ * @param bitplanes           Array of bitplanes (MSB-first) for this resolution.
+ * @param total_bitplane_count  Number of bitplanes available.
+ * @param decode_bitplanes    Number of bitplanes to decode (1..total, or total for all).
+ * @param out_width           Output plane width (ll_w << max_resolution).
+ * @param out_height          Output plane height (ll_h << max_resolution).
+ * @param max_resolution      Total resolution levels for the output plane.
+ * @param resolution          Which resolution this data represents (0..max_resolution).
+ * @param plane               Output coefficient plane (zeroed on entry).
+ * @return DIC_STATUS_OK on success.
+ */
+dic_status codec_scan_decode_subbands(
+    const codec_scan_bitplane *bitplanes,
+    int total_bitplane_count,
+    int decode_bitplanes,
+    int out_width,
+    int out_height,
+    int max_resolution,
+    int resolution,
+    int32_t *plane);
+
+/**
  * @brief Returns the number of magnitude bits needed to represent a signed amplitude.
  * @param amplitude Signed coefficient amplitude.
  * @return Bit width, or 0 when amplitude is zero.
