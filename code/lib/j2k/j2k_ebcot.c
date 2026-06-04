@@ -183,6 +183,29 @@ static dic_status j2k_ebcot_symbols_push(
     return DIC_STATUS_OK;
 }
 
+static dic_status j2k_ebcot_symbols_append(
+    j2k_ebcot_symbols *destination,
+    const j2k_ebcot_symbols *source
+)
+{
+    j2k_DEBUG_ENTER();
+    size_t index;
+
+    if (destination == NULL || source == NULL)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    for (index = 0u; index < source->count; ++index)
+    {
+        dic_status status = j2k_ebcot_symbols_push(
+            destination,
+            source->contexts[index],
+            source->decisions[index]
+        );
+        if (status != DIC_STATUS_OK)
+            return status;
+    }
+    return DIC_STATUS_OK;
+}
+
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex D.1 Figure D.1, coefficients are scanned in four-row vertical stripes. */
 static size_t j2k_ebcot_index(uint32_t x, uint32_t y, uint32_t width)
 {
@@ -719,6 +742,145 @@ static void j2k_ebcot_clear_pass_flags(j2k_ebcot_state *state, size_t coefficien
 }
 
 /* Reference: paper/T-REC-T.800-200208.pdf, Annex D.3 and Figure D.3, the first significant bit-plane has cleanup only; lower bit-planes then emit significance propagation, magnitude refinement, and cleanup passes. */
+dic_status j2k_ebcot_encode_codeblock_rect_aggregate(
+    const int32_t *coefficients,
+    uint32_t width,
+    uint32_t height,
+    j2k_subband_orientation orientation,
+    j2k_codeblock_stream *stream
+)
+{
+    j2k_DEBUG_ENTER();
+    j2k_ebcot_state *state = NULL;
+    j2k_ebcot_symbols symbols;
+    j2k_ebcot_symbols all_symbols;
+    j2k_mq_context_state initial_contexts[j2k_EBCOT_CONTEXT_COUNT];
+    size_t coefficient_count;
+    uint32_t bitplanes;
+    uint32_t plane;
+    uint32_t pass_index = 0u;
+    dic_status status = DIC_STATUS_OK;
+
+    j2k_ebcot_symbols_init(&symbols);
+    j2k_ebcot_symbols_init(&all_symbols);
+    if (coefficients == NULL || stream == NULL || width == 0u || height == 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (orientation > j2k_SUBBAND_HH)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if ((size_t)width > (size_t)-1 / height)
+        return DIC_STATUS_INVALID_ARGUMENT;
+
+    coefficient_count = (size_t)width * height;
+    state = (j2k_ebcot_state *)calloc(coefficient_count, sizeof(state[0]));
+    if (state == NULL)
+        return DIC_STATUS_MEMORY_ERROR;
+
+    j2k_codeblock_stream_free(stream);
+    bitplanes = j2k_required_bitplanes(coefficients, coefficient_count);
+    stream->coding_passes = bitplanes == 0u ? 0u : j2k_ebcot_pass_count_for_bitplanes(bitplanes);
+    if (stream->coding_passes > 0u)
+    {
+        stream->pass_decision_counts = (size_t *)calloc(stream->coding_passes, sizeof(stream->pass_decision_counts[0]));
+        if (stream->pass_decision_counts == NULL)
+        {
+            status = DIC_STATUS_MEMORY_ERROR;
+        }
+    }
+
+    if (status == DIC_STATUS_OK && bitplanes != 0u)
+    {
+        j2k_ebcot_initial_contexts(initial_contexts);
+        for (plane = bitplanes; plane > 0u && status == DIC_STATUS_OK; --plane)
+        {
+            uint32_t bitplane = plane - 1u;
+
+            if (plane != bitplanes)
+            {
+                j2k_ebcot_symbols_clear(&symbols);
+                status = j2k_ebcot_encode_sigprop_pass(
+                    coefficients,
+                    state,
+                    width,
+                    height,
+                    orientation,
+                    bitplane,
+                    &symbols
+                );
+                if (status != DIC_STATUS_OK)
+                    break;
+                stream->pass_decision_counts[pass_index++] = symbols.count;
+                status = j2k_ebcot_symbols_append(&all_symbols, &symbols);
+                if (status != DIC_STATUS_OK)
+                    break;
+                j2k_ebcot_symbols_clear(&symbols);
+                status = j2k_ebcot_encode_magref_pass(
+                    coefficients,
+                    state,
+                    width,
+                    height,
+                    bitplane,
+                    &symbols
+                );
+                if (status != DIC_STATUS_OK)
+                    break;
+                stream->pass_decision_counts[pass_index++] = symbols.count;
+                status = j2k_ebcot_symbols_append(&all_symbols, &symbols);
+                if (status != DIC_STATUS_OK)
+                    break;
+            }
+            j2k_ebcot_symbols_clear(&symbols);
+            status = j2k_ebcot_encode_cleanup_pass(
+                coefficients,
+                state,
+                width,
+                height,
+                orientation,
+                bitplane,
+                &symbols
+            );
+            if (status != DIC_STATUS_OK)
+                break;
+            stream->pass_decision_counts[pass_index++] = symbols.count;
+            status = j2k_ebcot_symbols_append(&all_symbols, &symbols);
+            if (status == DIC_STATUS_OK)
+                j2k_ebcot_clear_pass_flags(state, coefficient_count);
+        }
+        if (status == DIC_STATUS_OK)
+        {
+            status = j2k_mq_encode_decisions_with_state_result(
+                initial_contexts,
+                j2k_EBCOT_CONTEXT_COUNT,
+                all_symbols.contexts,
+                all_symbols.decisions,
+                all_symbols.count,
+                &stream->mq,
+                NULL,
+                0u
+            );
+        }
+        if (status == DIC_STATUS_OK)
+            status = j2k_ebcot_trim_terminal_ff_stream(&stream->mq);
+    }
+
+    if (status == DIC_STATUS_OK)
+    {
+        stream->magnitude_bitplanes = bitplanes;
+        stream->zero_bitplanes = 0u;
+        stream->width = width;
+        stream->height = height;
+        stream->subband_orientation = (uint8_t)orientation;
+    }
+    else
+    {
+        j2k_codeblock_stream_free(stream);
+    }
+
+    j2k_ebcot_symbols_free(&all_symbols);
+    j2k_ebcot_symbols_free(&symbols);
+    free(state);
+    return status;
+}
+
 dic_status j2k_ebcot_encode_codeblock_rect(
     const int32_t *coefficients,
     uint32_t width,
@@ -1385,7 +1547,9 @@ static dic_status j2k_ebcot_decode_codeblock_rect_prefix(
                 }
             }
             status = symbols.status;
-            if (status == DIC_STATUS_OK && session.decisions_decoded != stream->mq.bit_count)
+            if (status == DIC_STATUS_OK
+                && stream->mq.bit_count != (size_t)-1
+                && session.decisions_decoded != stream->mq.bit_count)
                 status = DIC_J2K_MALFORMED_ARITHMETIC_STREAM;
         }
     }

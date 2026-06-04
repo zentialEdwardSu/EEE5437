@@ -47,18 +47,20 @@ dic_status j2k_quant_base_step_from_quality(int quality, double *base_step)
 
 dic_status j2k_quantize_coefficient(double coefficient, double step_size, int32_t *quantized)
 {
-    double rounded;
+    double magnitude;
+    double quantized_magnitude;
 
     if (quantized == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (!isfinite(coefficient) || !j2k_quant_is_positive_finite(step_size))
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    rounded = round(coefficient / step_size);
-    if (rounded < (double)INT32_MIN || rounded > (double)INT32_MAX)
+    magnitude = fabs(coefficient);
+    quantized_magnitude = floor(magnitude / step_size);
+    if (quantized_magnitude > (double)INT32_MAX)
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    *quantized = (int32_t)rounded;
+    *quantized = coefficient < 0.0 ? -(int32_t)quantized_magnitude : (int32_t)quantized_magnitude;
     return DIC_STATUS_OK;
 }
 
@@ -67,7 +69,12 @@ dic_status j2k_dequantize_coefficient(int32_t quantized, double step_size, doubl
     if (coefficient == NULL || !j2k_quant_is_positive_finite(step_size))
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    *coefficient = (double)quantized * step_size;
+    if (quantized == 0)
+        *coefficient = 0.0;
+    else if (quantized < 0)
+        *coefficient = -(((double)(-quantized) + 0.5) * step_size);
+    else
+        *coefficient = ((double)quantized + 0.5) * step_size;
     if (!isfinite(*coefficient))
         return DIC_STATUS_INVALID_ARGUMENT;
     return DIC_STATUS_OK;

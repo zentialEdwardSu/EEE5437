@@ -353,7 +353,7 @@ static int j2k_write_cod(FILE *file, const j2k_basic_params *params)
         || !j2k_write_u8(file, params->decomposition_levels) /** NL: DWT levels (Table A.18). */
         || !j2k_write_u8(file, 4u)             /** Code-block width exponent 4 => 2^(4+2)=64 (Table A.19). */
         || !j2k_write_u8(file, 4u)             /** Code-block height exponent 4 => 64 (Table A.19). */
-        || !j2k_write_u8(file, 0x04u)          /** Code-block style 0x04: bypass+causal+regular (Table A.20, Annex D.5.2). */
+        || !j2k_write_u8(file, params->codeblock_style) /** Code-block style flags (Table A.20). */
         || !j2k_write_u8(file, params->reversible ? 1u : 0u)) /** Transform: 0=9-7, 1=5-3 (Table A.21). */
     {
         return 0;

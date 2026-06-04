@@ -121,6 +121,7 @@ static dic_status j2k_parse_cod(FILE *file, uint16_t length, j2k_codestream_info
     uint8_t mct;
     uint8_t levels;
     uint8_t ignored;
+    uint8_t codeblock_style;
     uint8_t transform;
     uint8_t resolution;
     uint16_t expected_length;
@@ -134,13 +135,14 @@ static dic_status j2k_parse_cod(FILE *file, uint16_t length, j2k_codestream_info
         || !j2k_read_u8(file, &levels)
         || !j2k_read_u8(file, &ignored)
         || !j2k_read_u8(file, &ignored)
-        || !j2k_read_u8(file, &ignored)
+        || !j2k_read_u8(file, &codeblock_style)
         || !j2k_read_u8(file, &transform))
     {
         return DIC_STATUS_FILE_READ_ERROR;
     }
     (void)progression;
     info->params.layers = layers;
+    info->params.codeblock_style = codeblock_style;
     info->params.multiple_component_transform = mct;
     info->params.decomposition_levels = levels;
     info->params.reversible = transform == 1u ? 1u : 0u;

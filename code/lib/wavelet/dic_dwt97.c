@@ -133,9 +133,9 @@ static dic_status dic_dwt97_forward_1d(double *samples, int length, double *scra
     dic_dwt97_update_low(low, high, low_count, high_count, DIC_DWT97_DELTA);
 
     for (i = 0; i < low_count; ++i)
-        samples[i] = low[i] * DIC_DWT97_K;
+        samples[i] = low[i] / DIC_DWT97_K;
     for (i = 0; i < high_count; ++i)
-        samples[low_count + i] = high[i] / DIC_DWT97_K;
+        samples[low_count + i] = high[i] * DIC_DWT97_K;
 
     return DIC_STATUS_OK;
 }
@@ -159,9 +159,9 @@ static dic_status dic_dwt97_inverse_1d(double *samples, int length, double *scra
     high = scratch + low_count;
 
     for (i = 0; i < low_count; ++i)
-        low[i] = samples[i] / DIC_DWT97_K;
+        low[i] = samples[i] * DIC_DWT97_K;
     for (i = 0; i < high_count; ++i)
-        high[i] = samples[low_count + i] * DIC_DWT97_K;
+        high[i] = samples[low_count + i] / DIC_DWT97_K;
 
     dic_dwt97_update_low(low, high, low_count, high_count, -DIC_DWT97_DELTA);
     dic_dwt97_update_high(high, low, low_count, high_count, -DIC_DWT97_GAMMA);

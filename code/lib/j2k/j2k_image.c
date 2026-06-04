@@ -600,6 +600,7 @@ static dic_status j2k_image_append_subband_streams(
     const dic_rect_i32 *rect,
     j2k_subband_orientation orientation,
     uint32_t nominal_bitplanes,
+    int aggregate_codeblocks,
     j2k_image_stream_list *streams
 )
 {
@@ -644,13 +645,21 @@ static dic_status j2k_image_append_subband_streams(
                     (size_t)block_width * sizeof(block[0])
                 );
             }
-            status = j2k_ebcot_encode_codeblock_rect(
-                block,
-                (uint32_t)block_width,
-                (uint32_t)block_height,
-                orientation,
-                stream
-            );
+            status = aggregate_codeblocks
+                ? j2k_ebcot_encode_codeblock_rect_aggregate(
+                    block,
+                    (uint32_t)block_width,
+                    (uint32_t)block_height,
+                    orientation,
+                    stream
+                )
+                : j2k_ebcot_encode_codeblock_rect(
+                    block,
+                    (uint32_t)block_width,
+                    (uint32_t)block_height,
+                    orientation,
+                    stream
+                );
             /* Reference: paper/T-REC-T.800-200208.pdf, Annex B.10.5 and Annex E.1.1, zero bit-planes are counted relative to the sub-band exponent advertised by QCD. */
             if (status == DIC_STATUS_OK)
             {
@@ -747,6 +756,7 @@ static dic_status j2k_image_append_resolution_packet(
                 &rect,
                 j2k_SUBBAND_LL_LH,
                 nominal_bitplanes == NULL ? 9u + component_extra_bits + roi_extra_bits : nominal_bitplanes[0],
+                layers == 1u,
                 subband_streams
             );
             if (status == DIC_STATUS_OK)
@@ -784,6 +794,7 @@ static dic_status j2k_image_append_resolution_packet(
                 nominal_bitplanes == NULL
                     ? (orientations[index] == DIC_SUBBAND_HH ? 11u : 10u) + component_extra_bits + roi_extra_bits
                     : nominal_bitplanes[1 + (resolution - 1) * 3 + (int)index],
+                layers == 1u,
                 subband_streams + index
             );
             if (status != DIC_STATUS_OK)
@@ -1140,6 +1151,7 @@ static dic_status j2k_image_encode_lossy_payload(
         params->reversible = 0u;
         params->multiple_component_transform = image->channels == 3 ? 1u : 0u;
         params->layers = layers;
+        params->codeblock_style = layers == 1u ? 0u : 0x04u;
         params->quant_guard_bits = (uint8_t)j2k_IMAGE_LOSSY_GUARD_BITS;
         params->quant_step_count = (uint16_t)step_count;
         params->use_sop = 1u;
@@ -1331,6 +1343,7 @@ static dic_status j2k_image_encode_payload(
         params->reversible = 1u;
         params->multiple_component_transform = image->channels == 3 ? 1u : 0u;
         params->layers = layers;
+        params->codeblock_style = layers == 1u ? 0u : 0x04u;
         params->roi_shift = roi_shift;
         params->use_sop = 1u;
         params->use_eph = 1u;
@@ -1368,6 +1381,7 @@ static void j2k_image_set_main_params(
     params->reversible = 1u;
     params->multiple_component_transform = image->channels == 3 ? 1u : 0u;
     params->layers = layers;
+    params->codeblock_style = layers == 1u ? 0u : 0x04u;
     params->tile_width = tile_width == image->width ? 0u : (uint32_t)tile_width;
     params->tile_height = tile_height == image->height ? 0u : (uint32_t)tile_height;
     params->use_sop = 1u;

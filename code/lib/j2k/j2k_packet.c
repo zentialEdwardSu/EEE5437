@@ -1140,9 +1140,7 @@ static dic_status j2k_packet_header_parser_parse_codeblock(
         if (codeblock->lblock > 31u)
             return DIC_J2K_FORMAT_ERROR;
 
-        if (!parser->terminated_passes && pass_count != 1u)
-            return DIC_STATUS_INVALID_ARGUMENT;
-        for (pass = 0u; pass < pass_count; ++pass)
+        for (pass = 0u; pass < (parser->terminated_passes ? pass_count : 1u); ++pass)
         {
             uint32_t length_value;
             size_t range_index;
@@ -1556,6 +1554,8 @@ static uint32_t j2k_packet_rd_layer_pass_boundary(
         return 0u;
     if (layer_index >= layers)
         return stream->coding_passes;
+    if (stream->pass_lengths == NULL)
+        return 0u;
     if (!j2k_packet_stream_has_rd_slopes(stream))
         return j2k_packet_layer_pass_boundary(stream->coding_passes, layer_index, layers);
 

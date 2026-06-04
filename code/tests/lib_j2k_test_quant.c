@@ -56,13 +56,17 @@ int main(void)
     DIC_EXPECT(j2k_quant_base_step_from_quality(50, NULL) == DIC_STATUS_INVALID_ARGUMENT);
 
     DIC_EXPECT(j2k_quantize_coefficient(5.0, 2.0, &quantized) == DIC_STATUS_OK);
-    DIC_EXPECT(quantized == 3);
+    DIC_EXPECT(quantized == 2);
     DIC_EXPECT(j2k_quantize_coefficient(-5.0, 2.0, &quantized) == DIC_STATUS_OK);
-    DIC_EXPECT(quantized == -3);
+    DIC_EXPECT(quantized == -2);
     DIC_EXPECT(j2k_quantize_coefficient(2.0, 2.0, &quantized) == DIC_STATUS_OK);
     DIC_EXPECT(quantized == 1);
+    DIC_EXPECT(j2k_quantize_coefficient(1.0, 2.0, &quantized) == DIC_STATUS_OK);
+    DIC_EXPECT(quantized == 0);
     DIC_EXPECT(j2k_dequantize_coefficient(-3, 2.0, &dequantized) == DIC_STATUS_OK);
-    dic_expect_near(dequantized, -6.0, 0.0);
+    dic_expect_near(dequantized, -7.0, 0.0);
+    DIC_EXPECT(j2k_dequantize_coefficient(0, 2.0, &dequantized) == DIC_STATUS_OK);
+    dic_expect_near(dequantized, 0.0, 0.0);
 
     DIC_EXPECT(j2k_quantize_coefficient(1.0, 0.0, &quantized) == DIC_STATUS_INVALID_ARGUMENT);
     DIC_EXPECT(j2k_quantize_coefficient(1.0, -1.0, &quantized) == DIC_STATUS_INVALID_ARGUMENT);

@@ -115,6 +115,8 @@ typedef struct j2k_basic_params
     uint8_t multiple_component_transform;
     /** Number of quality layers (COD SGcod, Annex A.6.1). */
     uint16_t layers;
+    /** Code-block coding style flags (COD SPcod, Table A.20). */
+    uint8_t codeblock_style;
     /** Tile width (SIZ XTsiz); 0 means single-tile (full image width). */
     uint32_t tile_width;
     /** Tile height (SIZ YTsiz); 0 means single-tile (full image height). */

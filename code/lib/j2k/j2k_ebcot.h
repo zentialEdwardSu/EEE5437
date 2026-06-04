@@ -139,6 +139,21 @@ dic_status j2k_ebcot_encode_codeblock_rect(
 );
 
 /**
+ * @brief EBCOT-encode one code-block as a single non-terminated MQ segment.
+ *
+ * This emits COD code-block style 0 compatible data: all coding passes are
+ * MQ-coded in one stream and packetized with a single aggregate codeword
+ * length. It does not provide per-pass truncation lengths.
+ */
+dic_status j2k_ebcot_encode_codeblock_rect_aggregate(
+    const int32_t *coefficients,
+    uint32_t width,
+    uint32_t height,
+    j2k_subband_orientation orientation,
+    j2k_codeblock_stream *stream
+);
+
+/**
  * @brief EBCOT-encode a linear coefficient array.
  *
  * Backward-compatible wrapper that treats coefficients as a linear

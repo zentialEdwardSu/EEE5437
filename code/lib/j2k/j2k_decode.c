@@ -38,6 +38,7 @@ enum
 {
     j2k_DECODE_CODEBLOCK_SIZE = 64,
     j2k_DECODE_INITIAL_LBLOCK = 3,
+    j2k_DECODE_CODEBLOCK_STYLE_TERMALL = 0x04,
     j2k_DECODE_MAX_TAGTREE_VALUE = 64
 };
 
@@ -88,6 +89,18 @@ typedef struct j2k_decode_tagtree
     size_t level_count;
     size_t node_count;
 } j2k_decode_tagtree;
+
+static uint32_t j2k_decode_floor_log2_u32(uint32_t value)
+{
+    uint32_t result = 0u;
+
+    while (value > 1u)
+    {
+        ++result;
+        value >>= 1u;
+    }
+    return result;
+}
 
 typedef struct j2k_decode_codeblock
 {
@@ -371,8 +384,8 @@ static dic_status j2k_decode_parse_siz(
  *
  * Extracts Scod flags (precincts/SOP/EPH), progression order (must be 0=LRCP),
  * number of layers, MCT flag, decomposition levels, code-block size (must be
- * exponent=4 => 64x64), code-block style (must be 0x04: bypass+causal+regular
- * per D.5.2), wavelet transform (0=9-7, 1=5-3). When precincts are enabled,
+ * exponent=4 => 64x64), code-block style, wavelet transform (0=9-7, 1=5-3).
+ * When precincts are enabled,
  * reads PPx/PPy for each resolution level r=0..N_L (each byte: PPy<<4|PPx),
  * requiring PPx=PPy=15 (max precinct) per the constrained decoder profile.
  */
@@ -410,9 +423,12 @@ static dic_status j2k_decode_parse_cod(
     params->use_sop = (uint8_t)((scod & 0x02u) != 0u);
     params->use_eph = (uint8_t)((scod & 0x04u) != 0u);
     params->reversible = transform == 1u ? 1u : 0u;
+    params->codeblock_style = codeblock_style;
     if (progression != 0u || params->layers == 0u)
         return DIC_J2K_FORMAT_ERROR;
-    if (codeblock_width != 4u || codeblock_height != 4u || codeblock_style != 0x04u)
+    if (codeblock_width != 4u || codeblock_height != 4u)
+        return DIC_J2K_FORMAT_ERROR;
+    if (codeblock_style != 0u && codeblock_style != j2k_DECODE_CODEBLOCK_STYLE_TERMALL)
         return DIC_J2K_FORMAT_ERROR;
     if (params->decomposition_levels > j2k_MAX_DECOMPOSITION_LEVELS)
         return DIC_J2K_INVALID_LEVELS;
@@ -974,7 +990,7 @@ static dic_status j2k_decode_contribution_list_push(
     j2k_decode_contribution *new_items;
     size_t new_capacity;
 
-    if (list == NULL || block == NULL || segment_lengths == NULL || segment_count == 0u)
+    if (list == NULL || block == NULL || segment_count == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (list->count == list->capacity)
     {
@@ -1011,11 +1027,15 @@ static dic_status j2k_decode_stream_append(
     size_t *new_lengths;
     uint32_t old_passes = stream->coding_passes;
 
-    if (stream == NULL || (codeword == NULL && codeword_size > 0u) || segment_lengths == NULL)
+    if (stream == NULL || (codeword == NULL && codeword_size > 0u) || segment_count == 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (codeword_size > (size_t)-1 - stream->mq.byte_count)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (segment_count > UINT32_MAX - stream->coding_passes)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (segment_lengths == NULL && stream->mq.byte_count != 0u)
+        return DIC_STATUS_INVALID_ARGUMENT;
+    if (segment_lengths != NULL && stream->pass_lengths == NULL && stream->coding_passes != 0u)
         return DIC_STATUS_INVALID_ARGUMENT;
     new_data = (uint8_t *)realloc(stream->mq.data, stream->mq.byte_count + codeword_size);
     if (new_data == NULL && stream->mq.byte_count + codeword_size > 0u)
@@ -1023,14 +1043,17 @@ static dic_status j2k_decode_stream_append(
     stream->mq.data = new_data;
     if (codeword_size > 0u)
         memcpy(stream->mq.data + stream->mq.byte_count, codeword, codeword_size);
-    new_lengths = (size_t *)realloc(
-        stream->pass_lengths,
-        ((size_t)stream->coding_passes + segment_count) * sizeof(stream->pass_lengths[0])
-    );
-    if (new_lengths == NULL)
-        return DIC_STATUS_MEMORY_ERROR;
-    stream->pass_lengths = new_lengths;
-    memcpy(stream->pass_lengths + old_passes, segment_lengths, (size_t)segment_count * sizeof(segment_lengths[0]));
+    if (segment_lengths != NULL)
+    {
+        new_lengths = (size_t *)realloc(
+            stream->pass_lengths,
+            ((size_t)stream->coding_passes + segment_count) * sizeof(stream->pass_lengths[0])
+        );
+        if (new_lengths == NULL)
+            return DIC_STATUS_MEMORY_ERROR;
+        stream->pass_lengths = new_lengths;
+        memcpy(stream->pass_lengths + old_passes, segment_lengths, (size_t)segment_count * sizeof(segment_lengths[0]));
+    }
     stream->mq.byte_count += codeword_size;
     stream->coding_passes += segment_count;
     stream->mq.bit_count = (size_t)-1;
@@ -1139,7 +1162,7 @@ static dic_status j2k_decode_packet(
                         uint32_t lblock_increment = 0u;
                         size_t *segment_lengths = NULL;
                         size_t total_length = 0u;
-                        uint32_t pass;
+                        int terminated_passes = (params->codeblock_style & j2k_DECODE_CODEBLOCK_STYLE_TERMALL) != 0u;
 
                         if (first_inclusion)
                         {
@@ -1181,21 +1204,39 @@ static dic_status j2k_decode_packet(
                             status = DIC_J2K_FORMAT_ERROR;
                             break;
                         }
-                        segment_lengths = (size_t *)calloc(pass_count, sizeof(segment_lengths[0]));
-                        if (segment_lengths == NULL)
+                        if (terminated_passes)
                         {
-                            status = DIC_STATUS_MEMORY_ERROR;
-                            break;
+                            uint32_t pass;
+
+                            segment_lengths = (size_t *)calloc(pass_count, sizeof(segment_lengths[0]));
+                            if (segment_lengths == NULL)
+                            {
+                                status = DIC_STATUS_MEMORY_ERROR;
+                                break;
+                            }
+                            for (pass = 0u; pass < pass_count; ++pass)
+                            {
+                                uint32_t length_value;
+
+                                status = j2k_decode_read_packet_bits(&reader, block->lblock, &length_value);
+                                if (status != DIC_STATUS_OK)
+                                    break;
+                                segment_lengths[pass] = length_value;
+                                total_length += length_value;
+                            }
                         }
-                        for (pass = 0u; pass < pass_count; ++pass)
+                        else
                         {
                             uint32_t length_value;
+                            uint32_t length_bits = block->lblock + j2k_decode_floor_log2_u32(pass_count);
 
-                            status = j2k_decode_read_packet_bits(&reader, block->lblock, &length_value);
-                            if (status != DIC_STATUS_OK)
+                            if (length_bits > 31u)
+                            {
+                                status = DIC_J2K_FORMAT_ERROR;
                                 break;
-                            segment_lengths[pass] = length_value;
-                            total_length += length_value;
+                            }
+                            status = j2k_decode_read_packet_bits(&reader, length_bits, &length_value);
+                            total_length = length_value;
                         }
                         if (status == DIC_STATUS_OK)
                         {
