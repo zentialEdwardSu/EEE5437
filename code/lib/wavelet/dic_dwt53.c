@@ -19,8 +19,11 @@ dic_status dic_dwt53_validate_levels(int width, int height, int levels)
 
     if (width <= 0 || height <= 0)
         return DIC_HW4_INVALID_DIMENSIONS;
-    if (levels <= 0)
+    if (levels < 0)
         return DIC_HW4_INVALID_LEVELS;
+
+    if (levels == 0)
+        return DIC_STATUS_OK;
 
     for (level = 0; level < levels; ++level)
     {

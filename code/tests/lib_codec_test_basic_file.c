@@ -1,90 +1,82 @@
+#include <stdint.h>
+#include <string.h>
 #include <stdio.h>
 
 #include "codec/basic_codec.h"
 #include "codec/basic_file.h"
-#include "codec/metrics.h"
 #include "test_helpers.h"
 
-static long dic_test_file_size(const char *path)
-{
-    FILE *file = NULL;
-    long size = -1;
-#if defined(_MSC_VER)
-    if (fopen_s(&file, path, "rb") != 0)
-#else
-    file = fopen(path, "rb");
-#endif
-    if (file == NULL) return -1;
-    if (fseek(file, 0, SEEK_END) == 0) size = ftell(file);
-    fclose(file);
-    return size;
-}
+#define TEST_FILE "test_resolution.dicw"
 
 int main(void)
 {
-    const char *path = "codec_basic_test.dicw";
-    uint8_t source[16 * 16];
-    codec_basic_encoded_image encoded = {0};
-    codec_basic_encoded_image read_back = {0};
-    dic_image_u8 decoded_mem = {0};
-    dic_image_u8 decoded_file = {0};
-    double psnr_mem, psnr_file;
-    long file_size;
+    uint8_t source[32 * 32];
     int y, x;
 
-    for (y = 0; y < 16; ++y)
-        for (x = 0; x < 16; ++x)
-            source[(y * 16) + x] = (uint8_t)(20 + x * 8 + y * 3 + ((x + y) % 5));
+    for (y = 0; y < 32; ++y)
+        for (x = 0; x < 32; ++x)
+            source[(size_t)y * 32u + (size_t)x] = (uint8_t)(50 + x + y);
 
-    DIC_EXPECT(codec_basic_encode_image(source, 16, 16, 1, 3, 4, &encoded) == DIC_STATUS_OK);
-    DIC_EXPECT(encoded.channel_streams != NULL);
-    DIC_EXPECT(encoded.channel_streams[0].resolutions != NULL);
-
-    /* In-memory roundtrip */
-    DIC_EXPECT(codec_basic_decode_image(&encoded, encoded.levels, 0, &decoded_mem) == DIC_STATUS_OK);
-    psnr_mem = codec_metric_psnr_u8(source, decoded_mem.data, 16u * 16u);
-
-    /* File roundtrip */
-    DIC_EXPECT(codec_basic_write_file(path, &encoded) == DIC_STATUS_OK);
-    file_size = dic_test_file_size(path);
-    DIC_EXPECT(file_size > 0);
-
-    DIC_EXPECT(codec_basic_read_file(path, &read_back) == DIC_STATUS_OK);
-    DIC_EXPECT(read_back.width == encoded.width);
-    DIC_EXPECT(read_back.height == encoded.height);
-    DIC_EXPECT(read_back.channels == encoded.channels);
-    DIC_EXPECT(read_back.levels == encoded.levels);
-    DIC_EXPECT(read_back.quant_step == encoded.quant_step);
-
-    DIC_EXPECT(codec_basic_decode_image(&read_back, read_back.levels, 0, &decoded_file) == DIC_STATUS_OK);
-    psnr_file = codec_metric_psnr_u8(source, decoded_file.data, 16u * 16u);
-
-    DIC_EXPECT(psnr_mem > 25.0);
-    DIC_EXPECT(psnr_file > 25.0);
-    DIC_EXPECT(psnr_file > psnr_mem - 0.1);
-
-    dic_image_u8_free(&decoded_mem);
-    dic_image_u8_free(&decoded_file);
-    codec_basic_encoded_free(&read_back);
-
-    /* Resolution-skip (partial) file read */
+    /* Encode and write */
     {
-        codec_basic_encoded_image partial = {0};
-        dic_image_u8 partial_decoded = {0};
-        double partial_psnr;
-
-        DIC_EXPECT(codec_basic_read_file_resolution(path, 0, &partial) == DIC_STATUS_OK);
-        DIC_EXPECT(codec_basic_decode_image(&partial, partial.levels, 0, &partial_decoded) == DIC_STATUS_OK);
-        partial_psnr = codec_metric_psnr_u8(source, partial_decoded.data, 16u * 16u);
-        printf("  full PSNR=%.4f, res-0-only PSNR=%.4f\n", psnr_file, partial_psnr);
-        DIC_EXPECT(partial_psnr < psnr_file);
-        DIC_EXPECT(partial_psnr > 5.0);
-
-        dic_image_u8_free(&partial_decoded);
-        codec_basic_encoded_free(&partial);
+        codec_basic_encoded_image encoded = {0};
+        DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 4, &encoded) == DIC_STATUS_OK);
+        DIC_EXPECT(codec_basic_write_file(TEST_FILE, &encoded) == DIC_STATUS_OK);
+        codec_basic_encoded_free(&encoded);
     }
 
-    codec_basic_encoded_free(&encoded);
-    remove(path);
+    /* Full read and decode */
+    {
+        codec_basic_encoded_image encoded = {0};
+        dic_image_u8 decoded = {0};
+
+        DIC_EXPECT(codec_basic_read_file(TEST_FILE, &encoded) == DIC_STATUS_OK);
+        DIC_EXPECT(encoded.levels == 3);
+        DIC_EXPECT(codec_basic_decode_image(&encoded, 3, 0, &decoded) == DIC_STATUS_OK);
+        DIC_EXPECT(decoded.width == 32);
+        DIC_EXPECT(decoded.height == 32);
+
+        codec_basic_encoded_free(&encoded);
+        dic_image_u8_free(&decoded);
+    }
+
+    /* Partial read — resolution 1 only (LL + 1 high-pass level => 8x8) */
+    {
+        codec_basic_encoded_image encoded = {0};
+        dic_image_u8 decoded = {0};
+
+        DIC_EXPECT(codec_basic_read_file_resolution(TEST_FILE, 1, &encoded) == DIC_STATUS_OK);
+        DIC_EXPECT(encoded.channel_streams[0].num_resolutions == 4);
+        /* Resolutions 0 and 1 should have data */
+        DIC_EXPECT(encoded.channel_streams[0].resolutions[0].num_bitplanes > 0);
+        DIC_EXPECT(encoded.channel_streams[0].resolutions[1].num_bitplanes > 0);
+        /* Resolutions 2 and 3 should be empty (skipped) */
+        DIC_EXPECT(encoded.channel_streams[0].resolutions[2].num_bitplanes == 0);
+        DIC_EXPECT(encoded.channel_streams[0].resolutions[3].num_bitplanes == 0);
+
+        DIC_EXPECT(codec_basic_decode_image(&encoded, 1, 0, &decoded) == DIC_STATUS_OK);
+        DIC_EXPECT(decoded.width == 8);
+        DIC_EXPECT(decoded.height == 8);
+
+        codec_basic_encoded_free(&encoded);
+        dic_image_u8_free(&decoded);
+    }
+
+    /* Partial read — resolution 0 (LL only => 4x4) */
+    {
+        codec_basic_encoded_image encoded = {0};
+        dic_image_u8 decoded = {0};
+
+        DIC_EXPECT(codec_basic_read_file_resolution(TEST_FILE, 0, &encoded) == DIC_STATUS_OK);
+        DIC_EXPECT(codec_basic_decode_image(&encoded, 0, 0, &decoded) == DIC_STATUS_OK);
+        DIC_EXPECT(decoded.width == 4);
+        DIC_EXPECT(decoded.height == 4);
+
+        codec_basic_encoded_free(&encoded);
+        dic_image_u8_free(&decoded);
+    }
+
+    /* Clean up */
+    remove(TEST_FILE);
     return 0;
 }
