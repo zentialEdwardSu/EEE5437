@@ -45,4 +45,4 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(opencv)
 
-FetchContent_GetProperties(cargs)
+FetchContent_MakeAvailable(cargs)

@@ -27,7 +27,9 @@ dic_register_homeworks("${CMAKE_CURRENT_SOURCE_DIR}")
 add_library(
     finalproj_impl
     STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/finalproj/finalproj_cli.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/finalproj/finalproj_codec.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/finalproj/finalproj_net.c"
 )
 dic_apply_target_layout(finalproj_impl "${CMAKE_CURRENT_SOURCE_DIR}/finalproj")
 target_link_libraries(finalproj_impl PUBLIC project_lib hw2_impl)

@@ -175,20 +175,14 @@ static void codec_basic_output_size(
     int width, int height, int levels, int max_resolution,
     int *out_width, int *out_height)
 {
-    int ll_w = width;
-    int ll_h = height;
     int i;
+    int steps = levels - max_resolution;
 
-    for (i = 0; i < levels; ++i) {
-        ll_w = dic_dwt53_low_size(ll_w);
-        ll_h = dic_dwt53_low_size(ll_h);
-    }
-
-    *out_width = ll_w;
-    *out_height = ll_h;
-    for (i = 0; i < max_resolution; ++i) {
-        *out_width *= 2;
-        *out_height *= 2;
+    *out_width = width;
+    *out_height = height;
+    for (i = 0; i < steps; ++i) {
+        *out_width = dic_dwt53_low_size(*out_width);
+        *out_height = dic_dwt53_low_size(*out_height);
     }
 }
 
@@ -245,6 +239,10 @@ dic_status codec_basic_decode_image(
     for (channel = 0; channel < encoded->channels; ++channel)
     {
         const codec_basic_channel_stream *stream = encoded->channel_streams + channel;
+
+        /* Zero the plane so positions not touched by this channel's
+           scan decode (e.g. ZTR-pruned subtrees) start clean. */
+        memset(plane, 0, plane_count * sizeof(plane[0]));
 
         /* Decode each resolution into the output plane */
         for (resolution = 0; resolution <= max_resolution; ++resolution)

@@ -38,37 +38,46 @@ static long finalproj_file_size_bytes(const char *path)
     return size;
 }
 
-double imageEncoder(const char *orgImageFileName, int quantizationStepSize)
+double imageEncoder(const char *orgImageFileName, int quantizationStepSize,
+                    const char *outputFileName)
 {
     dic_image_u8 original = {0};
     codec_basic_encoded_image encoded = {0};
+    dic_status status;
     long bitstream_size;
     double bitrate = -1.0;
 
-    if (orgImageFileName == NULL || quantizationStepSize <= 0)
+    if (orgImageFileName == NULL || outputFileName == NULL ||
+        quantizationStepSize <= 0) {
+        fprintf(stderr, "error: invalid arguments to imageEncoder\n");
         return -1.0;
+    }
 
-    if (dic_ppm_read(orgImageFileName, &original) != DIC_STATUS_OK)
+    status = dic_ppm_read(orgImageFileName, &original);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read input image '%s': %s\n",
+                orgImageFileName, dic_status_message(status));
         return -1.0;
+    }
 
-    if (codec_basic_encode_image(
-            original.data,
-            original.width,
-            original.height,
-            original.channels,
-            FINALPROJ_LEVELS,
-            quantizationStepSize,
-            &encoded) != DIC_STATUS_OK)
-    {
+    status = codec_basic_encode_image(
+        original.data, original.width, original.height, original.channels,
+        FINALPROJ_LEVELS, quantizationStepSize, &encoded);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: encode failed: %s\n", dic_status_message(status));
         dic_image_u8_free(&original);
         return -1.0;
     }
 
-    if (codec_basic_write_file(FINALPROJ_BITSTREAM_PATH, &encoded) == DIC_STATUS_OK)
-    {
-        bitstream_size = finalproj_file_size_bytes(FINALPROJ_BITSTREAM_PATH);
+    status = codec_basic_write_file(outputFileName, &encoded);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to write bitstream '%s': %s\n",
+                outputFileName, dic_status_message(status));
+    } else {
+        bitstream_size = finalproj_file_size_bytes(outputFileName);
         if (bitstream_size >= 0)
-            bitrate = codec_metric_bitrate((size_t)bitstream_size * 8u, original.width, original.height);
+            bitrate = codec_metric_bitrate((size_t)bitstream_size * 8u,
+                                           original.width, original.height);
     }
 
     codec_basic_encoded_free(&encoded);
@@ -85,42 +94,70 @@ double imageDecoder(
     codec_basic_encoded_image encoded = {0};
     dic_image_u8 original = {0};
     dic_image_u8 decoded = {0};
+    dic_status status;
     const char *reconstruction_path;
     double psnr = -1.0;
     size_t sample_count;
 
-    if (bitstreamFileName == NULL || orgImageFileName == NULL || quantizationStepSize <= 0)
+    if (bitstreamFileName == NULL || orgImageFileName == NULL ||
+        quantizationStepSize <= 0) {
+        fprintf(stderr, "error: invalid arguments to imageDecoder\n");
         return -1.0;
+    }
 
-    if (codec_basic_read_file(bitstreamFileName, &encoded) != DIC_STATUS_OK)
+    status = codec_basic_read_file(bitstreamFileName, &encoded);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read bitstream '%s': %s\n",
+                bitstreamFileName, dic_status_message(status));
         return -1.0;
-    if (encoded.quant_step != quantizationStepSize)
-    {
+    }
+
+    if (encoded.quant_step != quantizationStepSize) {
+        fprintf(stderr,
+                "error: quant_step mismatch: bitstream was encoded with "
+                "quant=%d but --quant %d was specified\n",
+                encoded.quant_step, quantizationStepSize);
         codec_basic_encoded_free(&encoded);
         return -1.0;
     }
 
-    if (codec_basic_decode_image(&encoded, encoded.levels, 0, &decoded) != DIC_STATUS_OK)
-    {
+    status = codec_basic_decode_image(&encoded, encoded.levels, 0, &decoded);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: decode failed: %s\n", dic_status_message(status));
         codec_basic_encoded_free(&encoded);
         return -1.0;
     }
 
-    if (dic_ppm_read(orgImageFileName, &original) == DIC_STATUS_OK
+    printf("Loading original image %s\n", orgImageFileName);
+    status = dic_ppm_read(orgImageFileName, &original);
+    if (status == DIC_STATUS_OK
         && original.width == decoded.width
         && original.height == decoded.height
         && original.channels == decoded.channels)
     {
-        sample_count = dic_image_u8_sample_count(original.width, original.height, original.channels);
+        sample_count = dic_image_u8_sample_count(original.width, original.height,
+                                                 original.channels);
         psnr = codec_metric_psnr_u8(original.data, decoded.data, sample_count);
+    } else if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read original image '%s': %s\n",
+                orgImageFileName, dic_status_message(status));
+    } else {
+        fprintf(stderr,
+                "error: original image dimensions (%dx%d, %d channels) do not "
+                "match decoded image (%dx%d, %d channels)\n",
+                original.width, original.height, original.channels,
+                decoded.width, decoded.height, decoded.channels);
     }
 
     reconstruction_path = decoded.channels == 1
         ? FINALPROJ_RECON_GRAY_PATH
         : FINALPROJ_RECON_RGB_PATH;
-    if (dic_ppm_write(reconstruction_path, &decoded) != DIC_STATUS_OK)
+    status = dic_ppm_write(reconstruction_path, &decoded);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to write reconstruction '%s': %s\n",
+                reconstruction_path, dic_status_message(status));
         psnr = -1.0;
-
+    }
     dic_image_u8_free(&original);
     dic_image_u8_free(&decoded);
     codec_basic_encoded_free(&encoded);
@@ -136,14 +173,20 @@ int imageWriteJ2K(
     dic_image_u8 image = {0};
     dic_status status;
 
-    if (orgImageFileName == NULL || outputFileName == NULL)
-        return 0;
+    if (orgImageFileName == NULL || outputFileName == NULL) return 0;
 
     status = dic_ppm_read(orgImageFileName, &image);
-    if (status != DIC_STATUS_OK)
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read input image '%s': %s\n",
+                orgImageFileName, dic_status_message(status));
         return 0;
+    }
 
     status = j2k_write_image_codestream(outputFileName, &image, FINALPROJ_LEVELS, quality);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to write J2K codestream '%s': %s\n",
+                outputFileName, dic_status_message(status));
+    }
     dic_image_u8_free(&image);
     return status == DIC_STATUS_OK;
 }
@@ -157,14 +200,20 @@ int imageWriteJP2(
     dic_image_u8 image = {0};
     dic_status status;
 
-    if (orgImageFileName == NULL || outputFileName == NULL)
-        return 0;
+    if (orgImageFileName == NULL || outputFileName == NULL) return 0;
 
     status = dic_ppm_read(orgImageFileName, &image);
-    if (status != DIC_STATUS_OK)
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read input image '%s': %s\n",
+                orgImageFileName, dic_status_message(status));
         return 0;
+    }
 
     status = j2k_write_image_jp2(outputFileName, &image, FINALPROJ_LEVELS, quality);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to write JP2 file '%s': %s\n",
+                outputFileName, dic_status_message(status));
+    }
     dic_image_u8_free(&image);
     return status == DIC_STATUS_OK;
 }
@@ -181,24 +230,27 @@ int imageWriteJP2Tiled(
     int tile_width;
     int tile_height;
 
-    if (orgImageFileName == NULL || outputFileName == NULL || tileSize < 0 || layers <= 0 || layers > 65535)
+    if (orgImageFileName == NULL || outputFileName == NULL || tileSize < 0 ||
+        layers <= 0 || layers > 65535)
         return 0;
 
     status = dic_ppm_read(orgImageFileName, &image);
-    if (status != DIC_STATUS_OK)
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read input image '%s': %s\n",
+                orgImageFileName, dic_status_message(status));
         return 0;
+    }
 
     tile_width = tileSize == 0 ? image.width : tileSize;
     tile_height = tileSize == 0 ? image.height : tileSize;
 
     status = j2k_write_image_jp2_tiled(
-        outputFileName,
-        &image,
-        FINALPROJ_LEVELS,
-        tile_width,
-        tile_height,
-        (uint16_t)layers
-    );
+        outputFileName, &image, FINALPROJ_LEVELS,
+        tile_width, tile_height, (uint16_t)layers);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to write tiled JP2 '%s': %s\n",
+                outputFileName, dic_status_message(status));
+    }
     dic_image_u8_free(&image);
     return status == DIC_STATUS_OK;
 }
@@ -220,11 +272,23 @@ int imageReadJ2KLayers(
     dic_image_u8 image = {0};
     dic_status status;
 
-    if (inputFileName == NULL || outputFileName == NULL || maxLayers < 0 || maxLayers > 65535)
+    if (inputFileName == NULL || outputFileName == NULL || maxLayers < 0 ||
+        maxLayers > 65535)
         return 0;
-    status = j2k_read_image_codestream_layers(inputFileName, (uint16_t)maxLayers, &image);
-    if (status == DIC_STATUS_OK)
-        status = dic_ppm_write(outputFileName, &image);
+
+    status = j2k_read_image_codestream_layers(inputFileName, (uint16_t)maxLayers,
+                                              &image);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read J2K codestream '%s': %s\n",
+                inputFileName, dic_status_message(status));
+        return 0;
+    }
+
+    status = dic_ppm_write(outputFileName, &image);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to write output image '%s': %s\n",
+                outputFileName, dic_status_message(status));
+    }
     dic_image_u8_free(&image);
     return status == DIC_STATUS_OK;
 }
@@ -246,11 +310,23 @@ int imageReadJP2Layers(
     dic_image_u8 image = {0};
     dic_status status;
 
-    if (inputFileName == NULL || outputFileName == NULL || maxLayers < 0 || maxLayers > 65535)
+    if (inputFileName == NULL || outputFileName == NULL || maxLayers < 0 ||
+        maxLayers > 65535)
         return 0;
-    status = j2k_read_image_jp2_layers(inputFileName, (uint16_t)maxLayers, &image);
-    if (status == DIC_STATUS_OK)
-        status = dic_ppm_write(outputFileName, &image);
+
+    status = j2k_read_image_jp2_layers(inputFileName, (uint16_t)maxLayers,
+                                       &image);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read JP2 file '%s': %s\n",
+                inputFileName, dic_status_message(status));
+        return 0;
+    }
+
+    status = dic_ppm_write(outputFileName, &image);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to write output image '%s': %s\n",
+                outputFileName, dic_status_message(status));
+    }
     dic_image_u8_free(&image);
     return status == DIC_STATUS_OK;
 }
@@ -291,4 +367,55 @@ int imageReadJP2Info(const char *inputFileName)
     if (jp2_read_codestream_info(inputFileName, &info) != DIC_STATUS_OK)
         return 0;
     return finalproj_print_j2k_info(&info);
+}
+
+int imageReadBitInfo(const char *bitstreamFileName)
+{
+    codec_basic_encoded_image encoded = {0};
+    dic_status status;
+    long file_size;
+    int ch, res;
+
+    if (bitstreamFileName == NULL) {
+        fprintf(stderr, "error: invalid arguments to imageReadBitInfo\n");
+        return 0;
+    }
+
+    file_size = finalproj_file_size_bytes(bitstreamFileName);
+    if (file_size < 0) {
+        fprintf(stderr, "error: cannot access '%s'\n", bitstreamFileName);
+        return 0;
+    }
+
+    status = codec_basic_read_file(bitstreamFileName, &encoded);
+    if (status != DIC_STATUS_OK) {
+        fprintf(stderr, "error: failed to read bitstream '%s': %s\n",
+                bitstreamFileName, dic_status_message(status));
+        return 0;
+    }
+
+    printf("file         %s\n", bitstreamFileName);
+    printf("file_bytes   %ld\n", file_size);
+    printf("version      3\n");
+    printf("width        %d\n", encoded.width);
+    printf("height       %d\n", encoded.height);
+    printf("channels     %d\n", encoded.channels);
+    printf("levels       %d\n", encoded.levels);
+    printf("quant_step   %d\n", encoded.quant_step);
+
+    for (ch = 0; ch < encoded.channels; ++ch) {
+        const codec_basic_channel_stream *stream = encoded.channel_streams + ch;
+        printf("channel_%d_resolutions %d\n", ch, stream->num_resolutions);
+
+        for (res = 0; res < stream->num_resolutions; ++res) {
+            const codec_basic_resolution_stream *rs = stream->resolutions + res;
+            printf("channel_%d_res_%d_bitplanes %d\n",
+                   ch, res, rs->num_bitplanes);
+            printf("channel_%d_res_%d_bytes    %zu\n",
+                   ch, res, codec_basic_resolution_byte_size(rs));
+        }
+    }
+
+    codec_basic_encoded_free(&encoded);
+    return 1;
 }

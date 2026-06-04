@@ -46,6 +46,10 @@ extern "C" {
 #define DIC_BASIC_FILE_MAGIC "DICW"
 #define DIC_BASIC_FILE_VERSION 3u
 #define DIC_BP_END_MARKER 0xFFFFFFFFu
+#define DIC_BASIC_MAX_LEVELS 32u
+
+/** Compute the on-disk byte size of one resolution's serialized data. */
+size_t codec_basic_resolution_byte_size(const codec_basic_resolution_stream *rs);
 
 /** Write full bitstream to file. */
 dic_status codec_basic_write_file(const char *path, const codec_basic_encoded_image *encoded);
@@ -63,6 +67,14 @@ dic_status codec_basic_read_stream(FILE *file, codec_basic_encoded_image *encode
 /** Read resolutions 0..max_resolution from open stream. */
 dic_status codec_basic_read_stream_resolution(
     FILE *file, int max_resolution, codec_basic_encoded_image *encoded);
+
+/** Serialize encoded image to a malloc'd buffer. Caller must free *out_buffer. */
+dic_status codec_basic_serialize(const codec_basic_encoded_image *encoded,
+                                  uint8_t **out_buffer, size_t *out_size);
+
+/** Deserialize encoded image from a memory buffer. */
+dic_status codec_basic_deserialize(const uint8_t *buffer, size_t size,
+                                    codec_basic_encoded_image *encoded);
 
 #ifdef __cplusplus
 }
