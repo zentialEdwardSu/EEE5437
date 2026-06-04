@@ -67,16 +67,16 @@ int main(void)
     dic_image_u8_free(&decoded_file);
     codec_basic_encoded_free(&read_back);
 
-    /* Progressive file read */
+    /* Resolution-skip (partial) file read */
     {
         codec_basic_encoded_image partial = {0};
         dic_image_u8 partial_decoded = {0};
         double partial_psnr;
 
-        DIC_EXPECT(codec_basic_read_file_bitplanes(path, 1, &partial) == DIC_STATUS_OK);
+        DIC_EXPECT(codec_basic_read_file_resolution(path, 0, &partial) == DIC_STATUS_OK);
         DIC_EXPECT(codec_basic_decode_image(&partial, partial.levels, 0, &partial_decoded) == DIC_STATUS_OK);
         partial_psnr = codec_metric_psnr_u8(source, partial_decoded.data, 16u * 16u);
-        printf("  full PSNR=%.4f, 1-bp PSNR=%.4f\n", psnr_file, partial_psnr);
+        printf("  full PSNR=%.4f, res-0-only PSNR=%.4f\n", psnr_file, partial_psnr);
         DIC_EXPECT(partial_psnr < psnr_file);
         DIC_EXPECT(partial_psnr > 5.0);
 
