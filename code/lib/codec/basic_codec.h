@@ -1,11 +1,17 @@
 #pragma once
 /**
  * @file basic_codec.h
- * @brief Basic image codec pipeline with progressive bitplane coding over 5/3 DWT coefficients.
+ * @brief Basic image codec pipeline with resolution and quality scalability.
  *
  * Encoding: interleaved 8-bit samples → deinterleave → 5/3 DWT → scalar quantize
- * → LL predict → EZW per-bitplane scan (MSB→LSB, auto-detected count).
- * Decoding: inverse operations with progressive quality via decode_image_bitplanes().
+ * → LL predict → per-resolution EZW bitplane scan (MSB→LSB, no zerotree).
+ *
+ * Decoding: per-resolution EZW decode → inverse LL predict → dequantize →
+ * max_resolution levels of inverse DWT.
+ *
+ * Scalability dimensions:
+ *   - max_resolution: 0 = LL only, levels = full resolution
+ *   - num_bitplanes:  1..N for progressive quality, 0 = all
  */
 
 #include <stddef.h>
@@ -18,16 +24,27 @@
 extern "C" {
 #endif
 
-/** Encoded data for one image channel. */
+/** Encoded data for one resolution level of one image channel. */
+typedef struct codec_basic_resolution_stream
+{
+    /** Bitplanes for this resolution (MSB-first). */
+    codec_scan_bitplane *bitplanes;
+    /** Number of bitplanes (auto-detected; 0 if all coefficients are 0). */
+    int num_bitplanes;
+    /** Resolution level (0 = LL, 1..levels = high-pass). */
+    int resolution;
+} codec_basic_resolution_stream;
+
+/** Encoded data for one image channel (per-resolution streams). */
 typedef struct codec_basic_channel_stream
 {
-    /** Bitplanes for this channel (MSB-first). */
-    codec_scan_bitplane *bitplanes;
-    /** Number of bitplanes (auto-detected during encoding). */
-    int num_bitplanes;
+    /** Per-resolution streams, resolutions[0] = LL, resolutions[levels] = finest. */
+    codec_basic_resolution_stream *resolutions;
+    /** Number of resolution levels = levels + 1. */
+    int num_resolutions;
 } codec_basic_channel_stream;
 
-/** Encoded representation of a full grayscale or RGB image with progressive bitplanes. */
+/** Encoded representation of a full grayscale or RGB image. */
 typedef struct codec_basic_encoded_image
 {
     int width;
@@ -35,8 +52,6 @@ typedef struct codec_basic_encoded_image
     int channels;
     int levels;
     int quant_step;
-    /** Total number of bitplanes (max_bp + 1, auto-detected). */
-    int num_bitplanes;
     /** One channel stream per channel. */
     codec_basic_channel_stream *channel_streams;
 } codec_basic_encoded_image;
@@ -45,11 +60,10 @@ void codec_basic_encoded_init(codec_basic_encoded_image *encoded);
 void codec_basic_encoded_free(codec_basic_encoded_image *encoded);
 
 /**
- * @brief Encodes an interleaved 8-bit image with progressive bitplane coding.
+ * @brief Encodes an interleaved 8-bit image with per-resolution bitplane coding.
  *
- * The number of bitplanes is auto-detected from the maximum coefficient
- * magnitude after quantization.  Each bitplane stores a Huffman-coded
- * significance pass (with EZT) and raw refinement bits.
+ * Each resolution level is independently encoded. Resolution 0 is the LL
+ * subband; resolution r ≥ 1 contains HL, LH, HH at DWT level (levels - r + 1).
  *
  * @param input      Interleaved source samples in row-major order.
  * @param width      Source width in pixels.
@@ -58,7 +72,7 @@ void codec_basic_encoded_free(codec_basic_encoded_image *encoded);
  * @param levels     Number of 5/3 DWT decomposition levels.
  * @param quant_step Positive scalar quantization step.
  * @param encoded    Output encoded image. Existing contents are freed.
- * @return DIC_STATUS_OK on success, otherwise an error status.
+ * @return DIC_STATUS_OK on success.
  */
 dic_status codec_basic_encode_image(
     const uint8_t *input,
@@ -70,29 +84,20 @@ dic_status codec_basic_encode_image(
     codec_basic_encoded_image *encoded);
 
 /**
- * @brief Decodes all bitplanes (full quality).
- * @param encoded Encoded image.
- * @param decoded Output image; receives allocated sample storage on success.
- * @return DIC_STATUS_OK on success, otherwise an error status.
+ * @brief Decodes an image with resolution and quality scalability.
+ *
+ * @param encoded        Encoded image.
+ * @param max_resolution Maximum resolution level to decode (0 = LL only,
+ *                       levels = full resolution).
+ * @param num_bitplanes  Number of bitplanes to decode per resolution
+ *                       (1..N, or 0 for all). Midpoint reconstruction is
+ *                       applied when fewer than available.
+ * @param decoded        Output image; receives allocated sample storage.
+ * @return DIC_STATUS_OK on success.
  */
 dic_status codec_basic_decode_image(
     const codec_basic_encoded_image *encoded,
-    dic_image_u8 *decoded);
-
-/**
- * @brief Decodes only the first num_bitplanes for progressive quality refinement.
- *
- * When num_bitplanes < encoded->num_bitplanes, midpoint reconstruction is
- * applied for the first missing bitplane.  Fewer bitplanes = faster decode
- * with lower quality.
- *
- * @param encoded       Encoded image.
- * @param num_bitplanes Number of bitplanes to decode (1..total).
- * @param decoded       Output image.
- * @return DIC_STATUS_OK on success, otherwise an error status.
- */
-dic_status codec_basic_decode_image_bitplanes(
-    const codec_basic_encoded_image *encoded,
+    int max_resolution,
     int num_bitplanes,
     dic_image_u8 *decoded);
 
