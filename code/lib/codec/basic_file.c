@@ -17,10 +17,7 @@
 #include <string.h>
 
 #include "hw2/hw2_huffman.h"
-
-/* -------------------------------------------------------------------------- */
-/*  Little-endian I/O helpers                                                 */
-/* -------------------------------------------------------------------------- */
+#include "fs/fs.h"
 
 static inline void u32_to_le_bytes(uint32_t value, unsigned char out[4]) {
   out[0] = (unsigned char)(value & 0xffu);
@@ -32,16 +29,6 @@ static inline void u32_to_le_bytes(uint32_t value, unsigned char out[4]) {
 static inline uint32_t u32_from_le_bytes(const unsigned char in[4]) {
   return (uint32_t)in[0] | ((uint32_t)in[1] << 8) | ((uint32_t)in[2] << 16) |
          ((uint32_t)in[3] << 24);
-}
-
-static FILE* codec_basic_open_file(const char* path, const char* mode) {
-  FILE* file = NULL;
-#if defined(_MSC_VER)
-  if (fopen_s(&file, path, mode) != 0) return NULL;
-  return file;
-#else
-  return fopen(path, mode);
-#endif
 }
 
 /* -------------------------------------------------------------------------- */
@@ -59,17 +46,11 @@ static int codec_basic_read_u32_le(FILE* file, uint32_t* value) {
 static dic_status codec_basic_read_bitplane(FILE* file,
                                             codec_scan_bitplane* bp) {
   uint32_t u32;
-  int k;
 
   codec_scan_bitplane_init(bp);
 
   if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
   bp->dominant_token_count = (size_t)u32;
-
-  for (k = 0; k < DIC_SCAN_TOKEN_COUNT; ++k) {
-    if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
-    bp->token_freq[k] = (size_t)u32;
-  }
 
   if (!codec_basic_read_u32_le(file, &u32)) return DIC_HW4_FORMAT_ERROR;
   bp->dominant_stream.bit_count = (size_t)u32;
@@ -134,7 +115,7 @@ size_t codec_basic_resolution_byte_size(
   int bp;
   for (bp = 0; bp < rs->num_bitplanes; ++bp) {
     const codec_scan_bitplane* cur = rs->bitplanes + bp;
-    size += 4u + 4u * DIC_SCAN_TOKEN_COUNT + 4u + 4u;
+    size += 4u + 4u + 4u;
     size += cur->dominant_stream.byte_count;
     size += 4u + 4u;
     size += cur->subordinate_byte_count;
@@ -173,7 +154,7 @@ dic_status codec_basic_write_file(const char* path,
   if (path == NULL || encoded == NULL || encoded->channel_streams == NULL)
     return DIC_STATUS_INVALID_ARGUMENT;
 
-  file = codec_basic_open_file(path, "wb");
+  file = fs_open_file(path, "wb");
   if (file == NULL) return DIC_STATUS_IO_ERROR;
 
   status = codec_basic_write_stream(file, encoded);
@@ -186,10 +167,11 @@ dic_status codec_basic_write_file(const char* path,
 /*  Header read (v3)                                                          */
 /* -------------------------------------------------------------------------- */
 
-static dic_status codec_basic_read_header_v3(
-    FILE* file, codec_basic_encoded_image* encoded) {
+static dic_status codec_basic_read_header(FILE* file,
+                                          codec_basic_encoded_image* encoded) {
   char magic[4];
   uint32_t version, width, height, channels, levels, quant_step;
+  unsigned char code_lengths[DIC_SCAN_TOKEN_COUNT];
 
   if (fread(magic, 1u, sizeof(magic), file) != sizeof(magic) ||
       memcmp(magic, DIC_BASIC_FILE_MAGIC, sizeof(magic)) != 0 ||
@@ -198,7 +180,9 @@ static dic_status codec_basic_read_header_v3(
       !codec_basic_read_u32_le(file, &height) ||
       !codec_basic_read_u32_le(file, &channels) ||
       !codec_basic_read_u32_le(file, &levels) ||
-      !codec_basic_read_u32_le(file, &quant_step)) {
+      !codec_basic_read_u32_le(file, &quant_step) ||
+      fread(code_lengths, 1u, DIC_SCAN_TOKEN_COUNT, file) !=
+          DIC_SCAN_TOKEN_COUNT) {
     return DIC_HW4_FORMAT_ERROR;
   }
 
@@ -206,6 +190,8 @@ static dic_status codec_basic_read_header_v3(
       levels == 0u || levels > DIC_BASIC_MAX_LEVELS || quant_step == 0u) {
     return DIC_HW4_FORMAT_ERROR;
   }
+
+  codec_scan_set_code_lengths(code_lengths);
 
   encoded->width = (int)width;
   encoded->height = (int)height;
@@ -228,7 +214,7 @@ static dic_status codec_basic_read_stream_resolution_internal(
 
   codec_basic_encoded_free(encoded);
 
-  status = codec_basic_read_header_v3(file, encoded);
+  status = codec_basic_read_header(file, encoded);
   if (status != DIC_STATUS_OK) return status;
 
   encoded->channel_streams = (codec_basic_channel_stream*)calloc(
@@ -321,7 +307,7 @@ dic_status codec_basic_read_file(const char* path,
 
   if (path == NULL || encoded == NULL) return DIC_STATUS_INVALID_ARGUMENT;
 
-  file = codec_basic_open_file(path, "rb");
+  file = fs_open_file(path, "rb");
   if (file == NULL) return DIC_STATUS_FILE_OPEN_ERROR;
 
   status = codec_basic_read_stream(file, encoded);
@@ -337,7 +323,7 @@ dic_status codec_basic_read_file_resolution(
 
   if (path == NULL || encoded == NULL) return DIC_STATUS_INVALID_ARGUMENT;
 
-  file = codec_basic_open_file(path, "rb");
+  file = fs_open_file(path, "rb");
   if (file == NULL) return DIC_STATUS_FILE_OPEN_ERROR;
 
   status = codec_basic_read_stream_resolution(file, max_resolution, encoded);
@@ -451,14 +437,8 @@ static int deser_buf_read_bytes(deser_buf* db, void* out, size_t len) {
 
 static dic_status codec_basic_serialize_bitplane(
     ser_buf* sb, const codec_scan_bitplane* bp) {
-  int k;
-
   if (!ser_buf_write_u32_le(sb, (uint32_t)bp->dominant_token_count))
     return DIC_STATUS_MEMORY_ERROR;
-
-  for (k = 0; k < DIC_SCAN_TOKEN_COUNT; ++k)
-    if (!ser_buf_write_u32_le(sb, (uint32_t)bp->token_freq[k]))
-      return DIC_STATUS_MEMORY_ERROR;
 
   if (!ser_buf_write_u32_le(sb, (uint32_t)bp->dominant_stream.bit_count))
     return DIC_STATUS_MEMORY_ERROR;
@@ -489,17 +469,11 @@ static dic_status codec_basic_serialize_bitplane(
 static dic_status codec_basic_deserialize_bitplane(deser_buf* db,
                                                    codec_scan_bitplane* bp) {
   uint32_t u32;
-  int k;
 
   codec_scan_bitplane_init(bp);
 
   if (!deser_buf_read_u32_le(db, &u32)) return DIC_HW4_FORMAT_ERROR;
   bp->dominant_token_count = (size_t)u32;
-
-  for (k = 0; k < DIC_SCAN_TOKEN_COUNT; ++k) {
-    if (!deser_buf_read_u32_le(db, &u32)) return DIC_HW4_FORMAT_ERROR;
-    bp->token_freq[k] = (size_t)u32;
-  }
 
   if (!deser_buf_read_u32_le(db, &u32)) return DIC_HW4_FORMAT_ERROR;
   bp->dominant_stream.bit_count = (size_t)u32;
@@ -586,6 +560,16 @@ dic_status codec_basic_serialize(const codec_basic_encoded_image* encoded,
     return DIC_STATUS_MEMORY_ERROR;
   }
 
+  /* Fixed Huffman code lengths (4 × u8) */
+  {
+    unsigned char code_lengths[DIC_SCAN_TOKEN_COUNT];
+    codec_scan_get_code_lengths(code_lengths);
+    if (!ser_buf_write_bytes(&sb, code_lengths, DIC_SCAN_TOKEN_COUNT)) {
+      ser_buf_free(&sb);
+      return DIC_STATUS_MEMORY_ERROR;
+    }
+  }
+
   for (channel = 0; channel < encoded->channels; ++channel) {
     const codec_basic_channel_stream* stream =
         encoded->channel_streams + channel;
@@ -621,6 +605,7 @@ dic_status codec_basic_deserialize(const uint8_t* buffer, size_t size,
   deser_buf db;
   dic_status status;
   uint32_t version, width, height, channels, levels, quant_step;
+  unsigned char code_lengths[DIC_SCAN_TOKEN_COUNT];
   char magic[4];
   int channel, res;
 
@@ -637,7 +622,8 @@ dic_status codec_basic_deserialize(const uint8_t* buffer, size_t size,
       !deser_buf_read_u32_le(&db, &height) ||
       !deser_buf_read_u32_le(&db, &channels) ||
       !deser_buf_read_u32_le(&db, &levels) ||
-      !deser_buf_read_u32_le(&db, &quant_step)) {
+      !deser_buf_read_u32_le(&db, &quant_step) ||
+      !deser_buf_read_bytes(&db, code_lengths, DIC_SCAN_TOKEN_COUNT)) {
     return DIC_HW4_FORMAT_ERROR;
   }
 
@@ -645,6 +631,8 @@ dic_status codec_basic_deserialize(const uint8_t* buffer, size_t size,
       levels == 0u || levels > DIC_BASIC_MAX_LEVELS || quant_step == 0u) {
     return DIC_HW4_FORMAT_ERROR;
   }
+
+  codec_scan_set_code_lengths(code_lengths);
 
   encoded->width = (int)width;
   encoded->height = (int)height;
