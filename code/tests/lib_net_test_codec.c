@@ -14,25 +14,21 @@
 #include "net/net_platform.h"
 #include "test_helpers.h"
 
-static void net_test_pause(void)
-{
-    net_platform_sleep_ms(1u);
-}
+static void net_test_pause(void) { net_platform_sleep_ms(1u); }
 
-static void net_test_codec_loopback(void)
-{
+static void net_test_codec_loopback(void) {
     uint8_t source[32 * 32];
     codec_basic_encoded_image encoded = {0};
-    uint8_t *ser_buf = NULL;
+    uint8_t* ser_buf = NULL;
     size_t ser_size = 0u;
     net_config listener_cfg;
     net_config client_cfg;
-    net_control *listener = NULL;
-    net_control *client = NULL;
+    net_control* listener = NULL;
+    net_control* client = NULL;
     uint16_t listener_port;
     uint8_t header[4];
     uint32_t payload_size;
-    uint8_t *recv_buf = NULL;
+    uint8_t* recv_buf = NULL;
     size_t total_received;
     int attempt;
     int x, y;
@@ -41,11 +37,14 @@ static void net_test_codec_loopback(void)
     /* Build test image */
     for (y = 0; y < 32; ++y)
         for (x = 0; x < 32; ++x)
-            source[(size_t)y * 32u + (size_t)x] = (uint8_t)((x * 7 + y * 13) & 0xff);
+            source[(size_t)y * 32u + (size_t)x] =
+                (uint8_t)((x * 7 + y * 13) & 0xff);
 
     /* Encode and serialize */
-    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 4, &encoded) == DIC_STATUS_OK);
-    DIC_EXPECT(codec_basic_serialize(&encoded, &ser_buf, &ser_size) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 2.5f, 0, &encoded) ==
+               DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_serialize(&encoded, &ser_buf, &ser_size) ==
+               DIC_STATUS_OK);
     DIC_EXPECT(ser_buf != NULL);
     DIC_EXPECT(ser_size > 0u);
 
@@ -69,7 +68,8 @@ static void net_test_codec_loopback(void)
     header[1] = (uint8_t)((ser_size >> 8) & 0xffu);
     header[2] = (uint8_t)((ser_size >> 16) & 0xffu);
     header[3] = (uint8_t)((ser_size >> 24) & 0xffu);
-    DIC_EXPECT(net_send(client, header, sizeof(header), &sent) == DIC_STATUS_OK);
+    DIC_EXPECT(net_send(client, header, sizeof(header), &sent) ==
+               DIC_STATUS_OK);
     DIC_EXPECT(sent == sizeof(header));
 
     /* Send payload */
@@ -83,26 +83,26 @@ static void net_test_codec_loopback(void)
         for (attempt = 0; attempt < 5000 && received_hdr < 4u; ++attempt) {
             size_t got = 0u;
             DIC_EXPECT(net_receive(listener, hdr + received_hdr,
-                                    4u - received_hdr, &got) == DIC_STATUS_OK);
+                                   4u - received_hdr, &got) == DIC_STATUS_OK);
             received_hdr += got;
             if (got == 0u) net_test_pause();
         }
         DIC_EXPECT(received_hdr == 4u);
-        payload_size = (uint32_t)hdr[0]
-            | ((uint32_t)hdr[1] << 8)
-            | ((uint32_t)hdr[2] << 16)
-            | ((uint32_t)hdr[3] << 24);
+        payload_size = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) |
+                       ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
     }
     DIC_EXPECT(payload_size == (uint32_t)ser_size);
 
     /* Receive payload */
-    recv_buf = (uint8_t *)malloc(payload_size);
+    recv_buf = (uint8_t*)malloc(payload_size);
     DIC_EXPECT(recv_buf != NULL);
     total_received = 0u;
-    for (attempt = 0; attempt < 5000 && total_received < payload_size; ++attempt) {
+    for (attempt = 0; attempt < 5000 && total_received < payload_size;
+         ++attempt) {
         size_t got = 0u;
         DIC_EXPECT(net_receive(listener, recv_buf + total_received,
-                                payload_size - total_received, &got) == DIC_STATUS_OK);
+                               payload_size - total_received,
+                               &got) == DIC_STATUS_OK);
         total_received += got;
         if (got == 0u) net_test_pause();
     }
@@ -115,16 +115,16 @@ static void net_test_codec_loopback(void)
         double psnr;
 
         DIC_EXPECT(codec_basic_deserialize(recv_buf, payload_size,
-                                            &decoded_enc) == DIC_STATUS_OK);
+                                           &decoded_enc) == DIC_STATUS_OK);
         DIC_EXPECT(decoded_enc.width == 32);
         DIC_EXPECT(decoded_enc.height == 32);
         DIC_EXPECT(decoded_enc.channels == 1);
         DIC_EXPECT(decoded_enc.levels == 3);
-        DIC_EXPECT(decoded_enc.quant_step == 4);
+        DIC_EXPECT(decoded_enc.quant_step == 2.5f);
 
         /* Decode and check PSNR */
-        DIC_EXPECT(codec_basic_decode_image(&decoded_enc, 3, 0,
-                                             &decoded_img) == DIC_STATUS_OK);
+        DIC_EXPECT(codec_basic_decode_image(&decoded_enc, 3, 0, &decoded_img) ==
+                   DIC_STATUS_OK);
         psnr = codec_metric_psnr_u8(source, decoded_img.data, 32u * 32u);
         DIC_EXPECT(psnr > 25.0);
 
@@ -140,8 +140,7 @@ static void net_test_codec_loopback(void)
     codec_basic_encoded_free(&encoded);
 }
 
-int main(void)
-{
+int main(void) {
     net_test_codec_loopback();
     return 0;
 }

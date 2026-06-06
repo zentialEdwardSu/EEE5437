@@ -15,6 +15,11 @@ extern "C" {
 
 #include <stdint.h>
 
+typedef enum finalproj_scaling_mode {
+    FINALPROJ_SCALING_SNR = 1,
+    FINALPROJ_SCALING_RESOLUTION = 2
+} finalproj_scaling_mode;
+
 /**
  * Encodes an image, serializes it, and sends over TCP.
  *
@@ -23,10 +28,11 @@ extern "C" {
  * @param port       Destination port.
  * @param quant      Positive quantization step.
  * @param rateLimit  Send rate limit in bytes/sec, 0 = unlimited.
+ * @param scalingMode SNR quality layers or resolution layers.
  * @return 1 on success, 0 on failure.
  */
-int networkSend(const char *inputFile, const char *host, int port,
-                int quant, uint32_t rateLimit);
+int networkSend(const char* inputFile, const char* host, int port, float quant,
+                uint32_t rateLimit, finalproj_scaling_mode scalingMode);
 
 /**
  * Listens for an encoded image over TCP, decodes progressively, saves output.
@@ -36,11 +42,14 @@ int networkSend(const char *inputFile, const char *host, int port,
  * @param port          Listen port.
  * @param outputFile    Path for reconstructed output PGM or PPM.
  * @param quant         Positive quantization step (must match sender).
- * @param originalFile  Optional original image for PSNR comparison (NULL = none).
+ * @param originalFile  Optional original image for PSNR comparison (NULL =
+ * none).
+ * @param scalingMode   Expected SNR or resolution progression mode.
  * @return 1 on success, 0 on failure.
  */
-int networkReceive(int port, const char *outputFile, int quant,
-                   const char *originalFile);
+int networkReceive(int port, const char* outputFile, float quant,
+                   const char* originalFile,
+                   finalproj_scaling_mode scalingMode);
 
 #ifdef __cplusplus
 }

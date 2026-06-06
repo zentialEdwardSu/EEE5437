@@ -5,17 +5,18 @@
  *
  * @verbatim
  *  ┌─────────────────────────────────────────────────────────────────┐
- *  │                    DICW v4 Bitstream Layout                      │
+ *  │                    DICW v6 Bitstream Layout                      │
  *  ├─────────────────────────────────────────────────────────────────┤
  *  │ Offset  Size      Field                                          │
  *  │ 0       4         magic[4] = "DICW"                             │
- *  │ 4       4         version (u32 LE) = 4                           │
+ *  │ 4       4         version (u32 LE) = 6                           │
  *  │ 8       4         width (u32 LE)                                 │
  *  │ 12      4         height (u32 LE)                                │
  *  │ 16      4         channels (u32 LE)                              │
  *  │ 20      4         levels (u32 LE)                                │
- *  │ 24      4         quant_step (u32 LE)                            │
+ *  │ 24      4         quant_step (IEEE-754 f32 LE)                   │
  *  │ 28      4         huffman_code_lengths[4] (u8 × 4)              │
+ *  │ 32      4         color_transform (u32 LE)  // 0=none, 1=RCT     │
  *  ├─────────────────────────────────────────────────────────────────┤
  *  │  For each channel c in 0..channels-1:                           │
  *  │    u32  num_resolutions = levels + 1                             │
@@ -44,7 +45,8 @@ extern "C" {
 #endif
 
 #define DIC_BASIC_FILE_MAGIC "DICW"
-#define DIC_BASIC_FILE_VERSION 4u
+#define DIC_BASIC_FILE_VERSION 6u
+#define DIC_BASIC_FILE_INTEGER_QUANT_VERSION 5u
 #define DIC_BP_END_MARKER 0xFFFFFFFFu
 #define DIC_BASIC_MAX_LEVELS 32u
 

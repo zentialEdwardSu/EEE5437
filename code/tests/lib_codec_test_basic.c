@@ -4,8 +4,7 @@
 #include "codec/metrics.h"
 #include "test_helpers.h"
 
-int main(void)
-{
+int main(void) {
     uint8_t source[32 * 32];
     codec_basic_encoded_image encoded = {0};
     int y, x, res;
@@ -13,10 +12,12 @@ int main(void)
     /* Build test image */
     for (y = 0; y < 32; ++y)
         for (x = 0; x < 32; ++x)
-            source[(size_t)y * 32u + (size_t)x] = (uint8_t)(20 + x * 2 + y * 3 + ((x + y) % 7));
+            source[(size_t)y * 32u + (size_t)x] =
+                (uint8_t)(20 + x * 2 + y * 3 + ((x + y) % 7));
 
     /* Encode */
-    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 4, &encoded) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 4, 0, &encoded) ==
+               DIC_STATUS_OK);
     DIC_EXPECT(encoded.width == 32);
     DIC_EXPECT(encoded.height == 32);
     DIC_EXPECT(encoded.channels == 1);
@@ -28,7 +29,8 @@ int main(void)
         dic_image_u8 decoded = {0};
         double psnr;
 
-        DIC_EXPECT(codec_basic_decode_image(&encoded, 3, 0, &decoded) == DIC_STATUS_OK);
+        DIC_EXPECT(codec_basic_decode_image(&encoded, 3, 0, &decoded) ==
+                   DIC_STATUS_OK);
         DIC_EXPECT(decoded.width == 32);
         DIC_EXPECT(decoded.height == 32);
 
@@ -43,7 +45,8 @@ int main(void)
 
         for (res = 0; res <= encoded.levels; ++res) {
             dic_image_u8 decoded = {0};
-            DIC_EXPECT(codec_basic_decode_image(&encoded, res, 0, &decoded) == DIC_STATUS_OK);
+            DIC_EXPECT(codec_basic_decode_image(&encoded, res, 0, &decoded) ==
+                       DIC_STATUS_OK);
             DIC_EXPECT(decoded.width == expected_sizes[res]);
             DIC_EXPECT(decoded.height == expected_sizes[res]);
             DIC_EXPECT(decoded.channels == 1);
@@ -67,7 +70,8 @@ int main(void)
             dic_image_u8 decoded = {0};
             double psnr_prog;
 
-            DIC_EXPECT(codec_basic_decode_image(&encoded, encoded.levels, bp, &decoded) == DIC_STATUS_OK);
+            DIC_EXPECT(codec_basic_decode_image(&encoded, encoded.levels, bp,
+                                                &decoded) == DIC_STATUS_OK);
             psnr_prog = codec_metric_psnr_u8(source, decoded.data, 32u * 32u);
             DIC_EXPECT(psnr_prog >= psnr_prev - 0.01);
             psnr_prev = psnr_prog;

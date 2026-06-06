@@ -10,7 +10,7 @@ extern "C" {
 #define FINALPROJ_LEVELS 5
 
 /** Encodes the assignment basic codec bitstream with progressive bitplane coding and returns bitrate in bits per pixel. */
-double imageEncoder(const char *orgImageFileName, int quantizationStepSize, const char *outputFileName);
+double imageEncoder(const char *orgImageFileName, float quantizationStepSize, const char *outputFileName);
 
 /** Reads a basic codec bitstream and prints its structure fields and byte sizes to stdout. */
 int imageReadBitInfo(const char *bitstreamFileName);
@@ -18,7 +18,7 @@ int imageReadBitInfo(const char *bitstreamFileName);
 /** Decodes the assignment basic codec bitstream and returns PSNR against the original image. */
 double imageDecoder(
     const char *bitstreamFileName,
-    int quantizationStepSize,
+    float quantizationStepSize,
     const char *orgImageFileName
 );
 

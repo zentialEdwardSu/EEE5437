@@ -21,7 +21,7 @@ VISUAL_STUDIO_GENERATORS = (
 
 
 def run(command: list[str], cwd: Path = REPO_ROOT) -> None:
-    print("+", " ".join(command))
+    print("+", " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, check=True)
 
 

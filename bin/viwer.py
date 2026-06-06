@@ -60,7 +60,7 @@ class PollViewer:
         self._last_pixels: bytes | None = None
         self._last_mtime: float = 0.0
         self._last_size: int = 0
-        self._error_logged: bool = False
+        self._last_error: str | None = None
 
         self.root.title("Waiting for file...")
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
@@ -92,17 +92,22 @@ class PollViewer:
             st = self.file_path.stat()
             if st.st_mtime == self._last_mtime and st.st_size == self._last_size:
                 return  # file unchanged, skip I/O
-            self._last_mtime = st.st_mtime
-            self._last_size = st.st_size
 
             img = load_image(self.file_path)
-            self._error_logged = False
+
+            # Only update cache after successful load -- if load_image
+            # raises, the stale values ensure the next poll retries.
+            self._last_mtime = st.st_mtime
+            self._last_size = st.st_size
+            self._last_error = None
         except Exception as exc:
-            if not self._error_logged:
+            msg = str(exc)
+            if msg != self._last_error:
                 print(f"viwer: {exc}", file=sys.stderr)
-                self._error_logged = True
-            self._show_black()
-            self.root.title("Waiting for file...")
+                self._last_error = msg
+            if self._last_pixels is None:
+                self.root.title("Waiting for file...")
+            self._reset_file_cache()
             return
 
         pixels = img.tobytes()
@@ -121,13 +126,10 @@ class PollViewer:
 
         self.root.title(f"{self.file_path.name} ({img.width}×{img.height})")
 
-    def _show_black(self) -> None:
-        """Clear the canvas to a black background."""
-        if self._last_pixels is not None:
-            self.canvas.delete("all")
-            self._last_pixels = None
-            self._last_mtime = 0.0
-            self._last_size = 0
+    def _reset_file_cache(self) -> None:
+        """Force the next poll to retry while preserving the last good image."""
+        self._last_mtime = 0.0
+        self._last_size = 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -23,7 +23,7 @@ extern "C" {
 dic_status codec_quant_scalar_i32(
     int32_t *values,
     size_t count,
-    int step_size
+    float step_size
 );
 
 /**
@@ -36,7 +36,7 @@ dic_status codec_quant_scalar_i32(
 dic_status codec_dequant_scalar_i32(
     int32_t *values,
     size_t count,
-    int step_size
+    float step_size
 );
 
 #ifdef __cplusplus
