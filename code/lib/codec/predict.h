@@ -1,8 +1,22 @@
 #pragma once
 /**
- * @file dic_predict.h
- * @brief DPCM like operation to remove the horizontal correlation in the LL wavelet subband.
- *        after predicted, 100 101 102 103 -> 100 1 2 3
+ * @file predict.h
+ * @brief Horizontal DPCM operation for the lowest LL wavelet subband.
+ *
+ * Prediction is reset at each row boundary:
+ *
+ * @code{.unparsed}
+ * source row:    100 101 103 106
+ * residual row: 100   1   2   3
+ *
+ * packed coefficient plane
+ * +-------------------+----------------------+
+ * | LL rectangle      | untouched subbands   |
+ * | processed by row  |                      |
+ * +-------------------+----------------------+
+ * | untouched subbands                       |
+ * +-------------------------------------------+
+ * @endcode
  */
 
 #include <stdint.h>

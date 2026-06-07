@@ -2,6 +2,23 @@
 /**
  * @file subband.h
  * @brief Rectangle layout helpers for multilevel 5/3 DWT subbands.
+ *
+ * A packed two-level coefficient plane is arranged as follows:
+ *
+ * @code{.unparsed}
+ * +-------------+-------------+---------------------------+
+ * | LL2         | HL2         |                           |
+ * +-------------+-------------+ HL1                       |
+ * | LH2         | HH2         |                           |
+ * +-------------+-------------+---------------------------+
+ * |                           |                           |
+ * | LH1                       | HH1                       |
+ * |                           |                           |
+ * +---------------------------+---------------------------+
+ * @endcode
+ *
+ * Level 1 contains the finest high-pass bands. The lowest LL rectangle is the
+ * recursively transformed top-left region.
  */
 
 #include "errors/errors.h"

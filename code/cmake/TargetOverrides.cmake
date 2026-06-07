@@ -5,6 +5,9 @@ function(dic_apply_target_overrides)
 
     if(TARGET finalproj_impl)
         target_link_libraries(finalproj_impl PUBLIC cargs)
+        target_compile_definitions(finalproj_impl PRIVATE
+            WITH_J2K=$<BOOL:${FINALPROJ_WITH_J2K}>
+        )
     endif()
     if(TARGET finalproj)
         target_link_libraries(finalproj PRIVATE cargs)

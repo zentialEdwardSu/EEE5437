@@ -41,7 +41,7 @@ static void net_test_codec_loopback(void) {
                 (uint8_t)((x * 7 + y * 13) & 0xff);
 
     /* Encode and serialize */
-    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 2.5f, 0, &encoded) ==
+    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 2.5f, &encoded) ==
                DIC_STATUS_OK);
     DIC_EXPECT(codec_basic_serialize(&encoded, &ser_buf, &ser_size) ==
                DIC_STATUS_OK);
@@ -123,7 +123,7 @@ static void net_test_codec_loopback(void) {
         DIC_EXPECT(decoded_enc.quant_step == 2.5f);
 
         /* Decode and check PSNR */
-        DIC_EXPECT(codec_basic_decode_image(&decoded_enc, 3, 0, &decoded_img) ==
+        DIC_EXPECT(codec_basic_decode_image(&decoded_enc, 0, &decoded_img) ==
                    DIC_STATUS_OK);
         psnr = codec_metric_psnr_u8(source, decoded_img.data, 32u * 32u);
         DIC_EXPECT(psnr > 25.0);

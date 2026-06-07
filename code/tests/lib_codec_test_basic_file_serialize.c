@@ -32,15 +32,14 @@ int main(void) {
                 (uint8_t)(20 + x * 2 + y * 3 + ((x + y) % 7));
 
     /* Encode */
-    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 2.5f, 0, &encoded) ==
+    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 2.5f, &encoded) ==
                DIC_STATUS_OK);
 
     /* --- Test 1: Serialize roundtrip --- */
     DIC_EXPECT(codec_basic_serialize(&encoded, &buffer, &buffer_size) ==
                DIC_STATUS_OK);
     DIC_EXPECT(buffer != NULL);
-    DIC_EXPECT(buffer_size >
-               32u); /* header is 36 bytes (v5 adds color_transform) */
+    DIC_EXPECT(buffer_size > 32u);
 
     /* Deserialize */
     {
@@ -57,26 +56,12 @@ int main(void) {
         DIC_EXPECT(deserialized.quant_step == 2.5f);
 
         /* Full decode from deserialized data */
-        DIC_EXPECT(codec_basic_decode_image(&deserialized, 3, 0, &decoded) ==
+        DIC_EXPECT(codec_basic_decode_image(&deserialized, 0, &decoded) ==
                    DIC_STATUS_OK);
         DIC_EXPECT(decoded.width == 32);
         DIC_EXPECT(decoded.height == 32);
         psnr = codec_metric_psnr_u8(source, decoded.data, 32u * 32u);
         DIC_EXPECT(psnr > 25.0);
-
-        /* Resolution scalability on deserialized data */
-        {
-            int expected_sizes[] = {4, 8, 16, 32};
-            int res;
-            for (res = 0; res <= deserialized.levels; ++res) {
-                dic_image_u8 dec_res = {0};
-                DIC_EXPECT(codec_basic_decode_image(&deserialized, res, 0,
-                                                    &dec_res) == DIC_STATUS_OK);
-                DIC_EXPECT(dec_res.width == expected_sizes[res]);
-                DIC_EXPECT(dec_res.height == expected_sizes[res]);
-                dic_image_u8_free(&dec_res);
-            }
-        }
 
         dic_image_u8_free(&decoded);
         codec_basic_encoded_free(&deserialized);
@@ -115,8 +100,9 @@ int main(void) {
             DIC_EXPECT(fseek(stream, 0, SEEK_SET) == 0);
             DIC_EXPECT(codec_basic_read_stream(stream, &streamed) ==
                        DIC_STATUS_OK);
-            DIC_EXPECT(codec_basic_decode_image(
-                           &streamed, 3, 0, &streamed_image) == DIC_STATUS_OK);
+            DIC_EXPECT(codec_basic_decode_image(&streamed, 0,
+                                                &streamed_image) ==
+                       DIC_STATUS_OK);
             DIC_EXPECT(streamed_image.width == 32);
             DIC_EXPECT(streamed_image.height == 32);
             dic_image_u8_free(&streamed_image);

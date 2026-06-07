@@ -1,42 +1,88 @@
 #pragma once
+/**
+ * @file finalproj_codec.h
+ * @brief Assignment-facing wrappers around the basic codec and JPEG 2000.
+ *
+ * @code{.unparsed}
+ * imageEncoder:
+ *   PGM/PPM -> codec_basic_encode_image -> DICW v7 file
+ *
+ * imageDecoder:
+ *   DICW v7 file -> codec_basic_decode_image -> image_recon.pgm/.ppm
+ * @endcode
+ */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/** Default DICW output used by the `bit codec` command. */
 #define FINALPROJ_BITSTREAM_PATH "image.bit"
+/** Default grayscale reconstruction path. */
 #define FINALPROJ_RECON_GRAY_PATH "image_recon.pgm"
+/** Default RGB reconstruction path. */
 #define FINALPROJ_RECON_RGB_PATH "image_recon.ppm"
+/** Wavelet decomposition level count used by assignment wrappers. */
 #define FINALPROJ_LEVELS 5
 
-/** Encodes the assignment basic codec bitstream with progressive bitplane coding and returns bitrate in bits per pixel. */
+/**
+ * @brief Encodes an image and writes a DICW v7 progressive bitstream.
+ * @param orgImageFileName Input PGM or PPM path.
+ * @param quantizationStepSize Finite positive scalar quantization step.
+ * @param outputFileName Destination DICW path.
+ * @return Encoded bits per pixel, or -1.0 on failure.
+ */
 double imageEncoder(const char *orgImageFileName, float quantizationStepSize, const char *outputFileName);
 
-/** Reads a basic codec bitstream and prints its structure fields and byte sizes to stdout. */
+/**
+ * @brief Parses DICW metadata and prints per-channel payload byte totals.
+ * @param bitstreamFileName DICW v7 source path.
+ * @return Nonzero on success, zero on failure.
+ */
 int imageReadBitInfo(const char *bitstreamFileName);
 
-/** Decodes the assignment basic codec bitstream and returns PSNR against the original image. */
+/**
+ * @brief Decodes all DICW layers and writes the reconstruction.
+ * @param bitstreamFileName DICW v7 source path.
+ * @param quantizationStepSize Expected stream quantization step.
+ * @param orgImageFileName Reference PGM/PPM used to calculate PSNR.
+ * @return PSNR in dB, infinity for an exact reconstruction, or -1.0 on
+ * failure.
+ */
 double imageDecoder(
     const char *bitstreamFileName,
     float quantizationStepSize,
     const char *orgImageFileName
 );
 
-/** Writes a raw J2K codestream; quality -1 is reversible, 1..100 is irreversible 9/7. */
+/**
+ * @brief Writes a raw J2K codestream.
+ * @param orgImageFileName Input PGM/PPM path.
+ * @param outputFileName Destination `.j2k` path.
+ * @param quality -1 for reversible coding, or 1..100 for irreversible 9/7.
+ * @return Nonzero on success, zero on failure.
+ */
 int imageWriteJ2K(
     const char *orgImageFileName,
     const char *outputFileName,
     int quality
 );
 
-/** Writes a JP2 file; quality -1 is reversible, 1..100 is irreversible 9/7. */
+/** @brief Writes a JP2 file; parameters follow imageWriteJ2K(). */
 int imageWriteJP2(
     const char *orgImageFileName,
     const char *outputFileName,
     int quality
 );
 
-/** Writes a tiled JP2 file with the requested JPEG 2000 quality layer count. */
+/**
+ * @brief Writes tiled JP2 with a requested quality-layer count.
+ * @param orgImageFileName Input PGM/PPM path.
+ * @param outputFileName Destination JP2 path.
+ * @param tileSize Square tile side, or zero for one full-image tile.
+ * @param layers Number of JPEG 2000 quality layers in 1..65535.
+ * @return Nonzero on success, zero on failure.
+ */
 int imageWriteJP2Tiled(
     const char *orgImageFileName,
     const char *outputFileName,
@@ -44,26 +90,38 @@ int imageWriteJP2Tiled(
     int layers
 );
 
-/** Decodes a raw J2K codestream and writes the reconstructed PGM or PPM image. */
+/** @brief Decodes all layers of a raw J2K codestream to PGM or PPM. */
 int imageReadJ2K(
     const char *inputFileName,
     const char *outputFileName
 );
 
-/** Decodes the first maxLayers quality layers of a raw J2K codestream and writes PGM or PPM output. */
+/**
+ * @brief Decodes a quality prefix of a raw J2K codestream.
+ * @param inputFileName Input raw codestream path.
+ * @param outputFileName Destination PGM/PPM path.
+ * @param maxLayers Maximum layers to decode, or zero for all layers.
+ * @return Nonzero on success, zero on failure.
+ */
 int imageReadJ2KLayers(
     const char *inputFileName,
     const char *outputFileName,
     int maxLayers
 );
 
-/** Decodes a JP2 file and writes the reconstructed PGM or PPM image. */
+/** @brief Decodes all layers of a JP2 file to PGM or PPM. */
 int imageReadJP2(
     const char *inputFileName,
     const char *outputFileName
 );
 
-/** Decodes the first maxLayers quality layers of a JP2 file and writes PGM or PPM output. */
+/**
+ * @brief Decodes a quality prefix of a JP2 file.
+ * @param inputFileName Input JP2 path.
+ * @param outputFileName Destination PGM/PPM path.
+ * @param maxLayers Maximum layers to decode, or zero for all layers.
+ * @return Nonzero on success, zero on failure.
+ */
 int imageReadJP2Layers(
     const char *inputFileName,
     const char *outputFileName,

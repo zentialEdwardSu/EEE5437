@@ -2,6 +2,11 @@
 /**
  * @file quant.h
  * @brief Scalar quantization helpers for signed 32-bit coefficients.
+ *
+ * @code{.unparsed}
+ * quantized   = symmetric_round(coefficient / step_size)
+ * reconstructed = symmetric_round(quantized * step_size)
+ * @endcode
  */
 
 #include <stddef.h>

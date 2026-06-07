@@ -2,6 +2,9 @@
 /**
  * @file metrics.h
  * @brief Image quality and rate metrics for codec experiments.
+ *
+ * MSE and PSNR operate on complete sample arrays, so RGB callers pass
+ * `width * height * 3` rather than the pixel count.
  */
 
 #include <stddef.h>

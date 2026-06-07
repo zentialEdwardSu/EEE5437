@@ -10,8 +10,10 @@ extern "C" {
 #endif
 
 /**
- * Parses command-line arguments, dispatches the selected command, and returns
- * a process exit code.
+ * @brief Parses arguments and dispatches one final-project subcommand.
+ * @param argc Argument count including the executable name.
+ * @param argv Argument vector.
+ * @return Process exit code: zero for success and nonzero for failure.
  */
 int finalproj_cli_run(int argc, char **argv);
 

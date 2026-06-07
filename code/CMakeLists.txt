@@ -47,3 +47,5 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TargetOverrides.cmake" OPTIONAL)
 if(COMMAND dic_apply_target_overrides)
     dic_apply_target_overrides()
 endif()
+
+set(FINALPROJ_WITH_J2K OFF CACHE BOOL "Enable j2k feature in finalproj cli" FORCE)

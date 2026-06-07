@@ -1,18 +1,26 @@
 #pragma once
 /**
  * @file basic_codec.h
- * @brief Basic image codec pipeline with resolution and quality scalability.
+ * @brief In-memory API for the full-plane progressive image codec.
  *
- * Encoding: interleaved 8-bit samples → deinterleave → 5/3 DWT → scalar
- * quantize → LL predict → per-resolution EZW bitplane scan (MSB→LSB, no
- * zerotree).
+ * The basic codec transforms an interleaved PGM/PPM-style sample array into
+ * independently progressive channel streams:
  *
- * Decoding: per-resolution EZW decode → inverse LL predict → dequantize →
- * max_resolution levels of inverse DWT.
+ * @code{.unparsed}
+ * interleaved u8 image
+ *        |
+ *        +--> split channels
+ *        +--> RGB reversible component transform (RGB only)
+ *        +--> multilevel 5/3 DWT
+ *        +--> scalar quantization
+ *        +--> LL left-neighbor prediction
+ *        +--> MSB-to-LSB zerotree bit-plane coding
+ *        |
+ *        `--> codec_basic_encoded_image
+ * @endcode
  *
- * Scalability dimensions:
- *   - max_resolution: 0 = LL only, levels = full resolution
- *   - num_bitplanes:  1..N for progressive quality, 0 = all
+ * This header describes the in-memory representation. DICW v7 file layout is
+ * documented in basic_file.h.
  */
 
 #include <stddef.h>
@@ -25,95 +33,106 @@
 extern "C" {
 #endif
 
-/** Encoded data for one resolution level of one image channel. */
-typedef struct codec_basic_resolution_stream {
-    /** Bitplanes for this resolution (MSB-first). */
-    codec_scan_bitplane* bitplanes;
-    /** Number of bitplanes (auto-detected; 0 if all coefficients are 0). */
-    int num_bitplanes;
-    /** Resolution level (0 = LL, 1..levels = high-pass). */
-    int resolution;
-} codec_basic_resolution_stream;
-
-/** Encoded data for one image channel (per-resolution streams). */
+/**
+ * @brief Progressive bit-plane stream for one transformed image component.
+ *
+ * Bit-plane element zero is the most significant coded plane. Each element
+ * owns its internal dominant, run-length, and refinement byte arrays.
+ */
 typedef struct codec_basic_channel_stream {
-    /** Per-resolution streams, resolutions[0] = LL, resolutions[levels] =
-     * finest.
-     */
-    codec_basic_resolution_stream* resolutions;
-    /** Number of resolution levels = levels + 1. */
-    int num_resolutions;
+    /** Heap array of @ref codec_scan_bitplane objects, or NULL when empty. */
+    codec_scan_bitplane* bitplanes;
+    /** Number of valid entries in @ref bitplanes. */
+    int num_bitplanes;
 } codec_basic_channel_stream;
 
-/** Encoded representation of a full grayscale or RGB image. */
+/**
+ * @brief Complete encoded image metadata and per-component streams.
+ *
+ * The object owns @ref channel_streams and every nested bit-plane allocation.
+ * Initialize with codec_basic_encoded_init() and release with
+ * codec_basic_encoded_free().
+ */
 typedef struct codec_basic_encoded_image {
+    /** Full-resolution image width in pixels. */
     int width;
+    /** Full-resolution image height in pixels. */
     int height;
+    /** Component count: one for grayscale or three for RGB-derived data. */
     int channels;
+    /** Number of 5/3 wavelet decomposition levels. */
     int levels;
+    /** Positive scalar quantization step stored in the bitstream. */
     float quant_step;
-    /** Color transform: 0 = none, 1 = RCT (RGB↔YCbCr). Always 0 for grayscale.
-     */
-    int color_transform;
-    /** One channel stream per channel. */
+    /** Heap array containing @ref channels component streams. */
     codec_basic_channel_stream* channel_streams;
 } codec_basic_encoded_image;
 
+/**
+ * @brief Resets an encoded-image object to an empty non-owning state.
+ * @param encoded Object to initialize; NULL is accepted.
+ */
 void codec_basic_encoded_init(codec_basic_encoded_image* encoded);
+
+/**
+ * @brief Releases all nested bit-plane data and resets the object.
+ * @param encoded Object to release; NULL is accepted.
+ */
 void codec_basic_encoded_free(codec_basic_encoded_image* encoded);
 
 /**
- * @brief Allocates channel and resolution arrays for incremental filling.
+ * @brief Allocates empty channel stream descriptors and records image metadata.
  *
- * Frees any prior data in `encoded`, then allocates `channel_streams[channels]`
- * with `num_resolutions = levels + 1` per channel.  All bitplane arrays start
- * NULL with `num_bitplanes = 0`.  Callers append bitplanes by growing the
- * per-resolution arrays and increasing their `num_bitplanes`.
+ * Existing contents of @p encoded are released first. Bit-plane arrays are not
+ * allocated by this function.
  *
- * @return DIC_STATUS_OK on success.
+ * @param encoded Destination object.
+ * @param width Positive image width.
+ * @param height Positive image height.
+ * @param channels One or three.
+ * @param levels Valid 5/3 DWT decomposition level count.
+ * @param quant_step Finite positive quantization step.
+ * @return DIC_STATUS_OK on success, otherwise a validation or allocation
+ * error.
  */
 dic_status codec_basic_encoded_alloc_streams(codec_basic_encoded_image* encoded,
                                              int width, int height,
                                              int channels, int levels,
-                                             float quant_step,
-                                             int color_transform);
+                                             float quant_step);
 
 /**
- * @brief Encodes an interleaved 8-bit image with per-resolution bitplane
- * coding.
+ * @brief Encodes an interleaved 8-bit image into progressive bit-plane streams.
  *
- * Each resolution level is independently encoded. Resolution 0 is the LL
- * subband; resolution r ≥ 1 contains HL, LH, HH at DWT level (levels - r + 1).
+ * RGB input always uses the reversible component transform. Grayscale input
+ * remains unchanged. On failure, @p encoded is left empty.
  *
- * @param input      Interleaved source samples in row-major order.
- * @param width      Source width in pixels.
- * @param height     Source height in pixels.
- * @param channels   Source channel count; must be 1 or 3.
- * @param levels     Number of 5/3 DWT decomposition levels.
- * @param quant_step Positive scalar quantization step.
- * @param color_transform 0 = none, 1 = RCT (valid only when channels == 3).
- * @param encoded    Output encoded image. Existing contents are freed.
- * @return DIC_STATUS_OK on success.
+ * @param input Row-major interleaved samples containing
+ * `width * height * channels` bytes.
+ * @param width Image width.
+ * @param height Image height.
+ * @param channels One for grayscale or three for RGB.
+ * @param levels Number of 5/3 DWT decomposition levels.
+ * @param quant_step Finite positive scalar quantization step.
+ * @param encoded Destination owning object.
+ * @return DIC_STATUS_OK on success, otherwise an error status.
  */
 dic_status codec_basic_encode_image(const uint8_t* input, int width, int height,
                                     int channels, int levels, float quant_step,
-                                    int color_transform,
                                     codec_basic_encoded_image* encoded);
 
 /**
- * @brief Decodes an image with resolution and quality scalability.
+ * @brief Reconstructs an image from the first quality bit-planes.
  *
- * @param encoded        Encoded image.
- * @param max_resolution Maximum resolution level to decode (0 = LL only,
- *                       levels = full resolution).
- * @param num_bitplanes  Number of bitplanes to decode per resolution
- *                       (1..N, or 0 for all). Midpoint reconstruction is
- *                       applied when fewer than available.
- * @param decoded        Output image; receives allocated sample storage.
- * @return DIC_STATUS_OK on success.
+ * @param encoded Valid encoded image.
+ * @param num_bitplanes Number of MSB-first planes to decode per channel.
+ * Zero means all available planes. Values larger than a channel's count are
+ * clamped to that count.
+ * @param decoded Destination image. The function allocates decoded->data;
+ * release it with dic_image_u8_free().
+ * @return DIC_STATUS_OK on success, otherwise an error status.
  */
 dic_status codec_basic_decode_image(const codec_basic_encoded_image* encoded,
-                                    int max_resolution, int num_bitplanes,
+                                    int num_bitplanes,
                                     dic_image_u8* decoded);
 
 #ifdef __cplusplus

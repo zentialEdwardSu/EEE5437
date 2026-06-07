@@ -3,8 +3,11 @@
  * @brief Implements the final project CLI with cargs option parsing.
  *
  * Two-level command hierarchy:
+ *
+ * @code{.unparsed}
  *   finalproj bit encode|decode|codec|send|receive|info [options]
  *   finalproj j2k write|write-tiled|read|info             [options]
+ * @endcode
  */
 
 #include "finalproj/finalproj_cli.h"
@@ -19,30 +22,44 @@
 #include "finalproj/finalproj_codec.h"
 #include "finalproj/finalproj_net.h"
 
+/** @brief Container type inferred from a JPEG 2000 filename extension. */
 typedef enum finalproj_j2k_container {
     finalproj_J2K_CONTAINER_UNKNOWN = 0,
     finalproj_J2K_CONTAINER_CODESTREAM = 1,
     finalproj_J2K_CONTAINER_JP2 = 2
 } finalproj_j2k_container;
 
+/**
+ * @brief Borrowed option strings collected during one subcommand parse.
+ *
+ * Members point into argv storage and are never freed by this structure.
+ */
 typedef struct finalproj_cli_values {
+    /** Borrowed `--input` value. */
     const char* input;
+    /** Borrowed `--output` value. */
     const char* output;
+    /** Borrowed `--bitstream` value. */
     const char* bitstream;
+    /** Borrowed `--original` reference-image value. */
     const char* original;
+    /** Borrowed `--tile-size` value. */
     const char* tile_size;
+    /** Borrowed JPEG 2000 `--quality` value. */
     const char* quality;
+    /** Borrowed basic-codec `--quant` value. */
     const char* quant;
+    /** Borrowed `--layers` value. */
     const char* layers;
+    /** Borrowed `--host` value. */
     const char* host;
+    /** Borrowed `--port` value before numeric conversion. */
     const char* port_str;
+    /** Borrowed `--rate` value before numeric conversion. */
     const char* rate;
-    const char* scaling;
 } finalproj_cli_values;
 
-/**
- * Prints the top-level command list.
- */
+/** @brief Prints the top-level command list to stderr. */
 static void finalproj_print_usage(void) {
     fprintf(
         stderr,
@@ -53,10 +70,11 @@ static void finalproj_print_usage(void) {
         "<file>\n"
         "  finalproj bit codec    --input <file> --quant <q>\n"
         "  finalproj bit send     --input <file> --host <HOST> --port <PORT> "
-        "--quant <q> [--rate <BYTES/SEC>] [--scaling <snr|resolution>]\n"
+        "--quant <q> [--rate <BYTES/SEC>]\n"
         "  finalproj bit receive  --port <PORT> --output <file> --quant <q> "
-        "[--original <file>] [--scaling <snr|resolution>]\n"
+        "[--original <file>]\n"
         "  finalproj bit info     --bitstream <file>\n"
+#if WITH_J2K
         "  finalproj j2k write        --input <file> --output <file> "
         "[--quality <Q|-1>]\n"
         "  finalproj j2k write-tiled  --input <file> --output <file> "
@@ -65,18 +83,20 @@ static void finalproj_print_usage(void) {
         "[--layers <N>]\n"
         "  finalproj j2k info         --input <file>\n"
         "\n"
+#endif
         "Use `finalproj <group> <command> --help` for command options.\n");
 }
 
-/* ========================================================================= */
 /*  Shared utilities                                                         */
-/* ========================================================================= */
 
+#if WITH_J2K
+/** @brief Converts one ASCII letter to lowercase without locale state. */
 static char finalproj_ascii_lower(char value) {
     if (value >= 'A' && value <= 'Z') return (char)(value - 'A' + 'a');
     return value;
 }
 
+/** @brief Performs a case-insensitive ASCII filename suffix check. */
 static int finalproj_has_extension(const char* path, const char* extension) {
     size_t path_length, extension_length, offset, index;
     if (path == NULL || extension == NULL) return 0;
@@ -91,7 +111,7 @@ static int finalproj_has_extension(const char* path, const char* extension) {
     }
     return 1;
 }
-
+/** @brief Maps `.j2k` and `.jp2` suffixes to decoder container types. */
 static finalproj_j2k_container finalproj_j2k_container_from_path(
     const char* path) {
     if (finalproj_has_extension(path, ".j2k"))
@@ -101,6 +121,20 @@ static finalproj_j2k_container finalproj_j2k_container_from_path(
     return finalproj_J2K_CONTAINER_UNKNOWN;
 }
 
+/** @brief Parses reversible `-1` or irreversible quality 1 through 100. */
+static int finalproj_parse_quality(const char* text, int* value) {
+    if (text == NULL) {
+        *value = -1;
+        return 1;
+    }
+    if (!finalproj_parse_int_range(text, -1, 100, value)) return 0;
+    return *value == -1 || *value >= 1;
+}
+#endif /* WITH_J2K */
+
+/**
+ * @brief Parses a base-10 integer and validates an inclusive range.
+ */
 static int finalproj_parse_int_range(const char* text, int min_value,
                                      int max_value, int* value) {
     char* end = NULL;
@@ -113,6 +147,7 @@ static int finalproj_parse_int_range(const char* text, int min_value,
     return 1;
 }
 
+/** @brief Parses a finite positive quantization step. */
 static int finalproj_parse_quant(const char* text, float* value) {
     char* end = NULL;
     float parsed;
@@ -125,15 +160,7 @@ static int finalproj_parse_quant(const char* text, float* value) {
     return 1;
 }
 
-static int finalproj_parse_quality(const char* text, int* value) {
-    if (text == NULL) {
-        *value = -1;
-        return 1;
-    }
-    if (!finalproj_parse_int_range(text, -1, 100, value)) return 0;
-    return *value == -1 || *value >= 1;
-}
-
+/** @brief Prints usage for one second-level command. */
 static void finalproj_print_command_usage(const char* command,
                                           const cag_option* options,
                                           size_t option_count) {
@@ -141,6 +168,9 @@ static void finalproj_print_command_usage(const char* command,
     cag_option_print(options, option_count, stderr);
 }
 
+/**
+ * @brief Routes one cargs identifier into the shared option structure.
+ */
 static int finalproj_store_option(finalproj_cli_values* values, char identifier,
                                   const char* value) {
     if (values == NULL) return 0;
@@ -176,14 +206,16 @@ static int finalproj_store_option(finalproj_cli_values* values, char identifier,
         case 'R':
             values->rate = value;
             return 1;
-        case 's':
-            values->scaling = value;
-            return 1;
         default:
             return 0;
     }
 }
 
+/**
+ * @brief Runs cargs parsing for one command and rejects positional leftovers.
+ *
+ * @return 1 for parsed options, 0 for an error, and -1 after printing help.
+ */
 static int finalproj_parse_command(int argc, char** argv, const char* command,
                                    const cag_option* options,
                                    size_t option_count,
@@ -213,6 +245,9 @@ static int finalproj_parse_command(int argc, char** argv, const char* command,
     return 1;
 }
 
+/**
+ * @brief Reads the PGM/PPM magic to select the wrapper reconstruction path.
+ */
 static const char* finalproj_expected_reconstruction_path(
     const char* original_path) {
     FILE* file = NULL;
@@ -234,10 +269,9 @@ static const char* finalproj_expected_reconstruction_path(
     return "image_recon.pgm or image_recon.ppm";
 }
 
-/* ========================================================================= */
 /*  bit encode / decode / codec / info                                       */
-/* ========================================================================= */
 
+/** @brief Handles `bit encode`. */
 static int finalproj_bit_encode(int argc, char** argv) {
     const cag_option options[] = {
         {'i', "i", "input", "FILE", "input PGM or PPM image"},
@@ -252,8 +286,7 @@ static int finalproj_bit_encode(int argc, char** argv) {
     int parse_result = finalproj_parse_command(
         argc, argv, "bit encode", options, CAG_ARRAY_SIZE(options), &values);
     if (parse_result <= 0) return parse_result < 0 ? 0 : 1;
-    if (values.input == NULL ||
-        !finalproj_parse_quant(values.quant, &q)) {
+    if (values.input == NULL || !finalproj_parse_quant(values.quant, &q)) {
         fprintf(stderr, "error: --input and positive --quant are required\n");
         return 1;
     }
@@ -269,6 +302,7 @@ static int finalproj_bit_encode(int argc, char** argv) {
     return 0;
 }
 
+/** @brief Handles `bit decode`. */
 static int finalproj_bit_decode(int argc, char** argv) {
     const cag_option options[] = {
         {'b', "b", "bitstream", "FILE", "input basic codec bitstream"},
@@ -299,6 +333,7 @@ static int finalproj_bit_decode(int argc, char** argv) {
     return 0;
 }
 
+/** @brief Handles the encode/decode `bit codec` round trip. */
 static int finalproj_bit_codec(int argc, char** argv) {
     const cag_option options[] = {
         {'i', "i", "input", "FILE", "input PGM or PPM image"},
@@ -310,8 +345,7 @@ static int finalproj_bit_codec(int argc, char** argv) {
     int parse_result = finalproj_parse_command(
         argc, argv, "bit codec", options, CAG_ARRAY_SIZE(options), &values);
     if (parse_result <= 0) return parse_result < 0 ? 0 : 1;
-    if (values.input == NULL ||
-        !finalproj_parse_quant(values.quant, &q)) {
+    if (values.input == NULL || !finalproj_parse_quant(values.quant, &q)) {
         fprintf(stderr, "error: --input and positive --quant are required\n");
         return 1;
     }
@@ -328,6 +362,7 @@ static int finalproj_bit_codec(int argc, char** argv) {
     return 0;
 }
 
+/** @brief Handles DICW metadata inspection. */
 static int finalproj_bit_info(int argc, char** argv) {
     const cag_option options[] = {
         {'b', "b", "bitstream", "FILE", "input basic codec bitstream"},
@@ -347,10 +382,9 @@ static int finalproj_bit_info(int argc, char** argv) {
     return 0;
 }
 
-/* ========================================================================= */
-/*  bit send / receive                                                       */
-/* ========================================================================= */
+/*  bit send / receive via TCP by libnet                       */
 
+/** @brief Handles staged DICQ encoding and TCP transmission. */
 static int finalproj_bit_send(int argc, char** argv) {
     const cag_option options[] = {
         {'i', "i", "input", "FILE", "input PGM or PPM image"},
@@ -359,20 +393,16 @@ static int finalproj_bit_send(int argc, char** argv) {
         {'q', "q", "quant", "VALUE", "positive quantization step"},
         {'R', NULL, "rate", "BYTES/SEC",
          "optional send rate limit (0 = unlimited)"},
-        {'s', NULL, "scaling", "MODE",
-         "progressive mode: snr or resolution (default: snr)"},
         {'h', "h", "help", NULL, "show this help"}};
     finalproj_cli_values values;
     float q = 0.0f;
     int port = 0;
     uint32_t rate_limit = 0u;
-    finalproj_scaling_mode scaling_mode = FINALPROJ_SCALING_SNR;
     int parse_result = finalproj_parse_command(
         argc, argv, "bit send", options, CAG_ARRAY_SIZE(options), &values);
     if (parse_result <= 0) return parse_result < 0 ? 0 : 1;
     if (values.input == NULL || values.host == NULL ||
-        values.port_str == NULL ||
-        !finalproj_parse_quant(values.quant, &q)) {
+        values.port_str == NULL || !finalproj_parse_quant(values.quant, &q)) {
         fprintf(stderr,
                 "error: --input, --host, --port, and positive --quant are "
                 "required\n");
@@ -390,24 +420,14 @@ static int finalproj_bit_send(int argc, char** argv) {
         }
         rate_limit = (uint32_t)rate_val;
     }
-    if (values.scaling != NULL) {
-        if (strcmp(values.scaling, "snr") == 0)
-            scaling_mode = FINALPROJ_SCALING_SNR;
-        else if (strcmp(values.scaling, "resolution") == 0)
-            scaling_mode = FINALPROJ_SCALING_RESOLUTION;
-        else {
-            fprintf(stderr, "error: --scaling must be snr or resolution\n");
-            return 1;
-        }
-    }
-    if (!networkSend(values.input, values.host, port, q, rate_limit,
-                     scaling_mode)) {
+    if (!networkSend(values.input, values.host, port, q, rate_limit)) {
         fprintf(stderr, "error: send command failed\n");
         return 1;
     }
     return 0;
 }
 
+/** @brief Handles incremental DICQ TCP reception and reconstruction. */
 static int finalproj_bit_receive(int argc, char** argv) {
     const cag_option options[] = {
         {'p', NULL, "port", "PORT", "listen port"},
@@ -416,13 +436,10 @@ static int finalproj_bit_receive(int argc, char** argv) {
          "positive quantization step (must match sender)"},
         {'r', "r", "original", "FILE",
          "optional original image for PSNR comparison"},
-        {'s', NULL, "scaling", "MODE",
-         "progressive mode: snr or resolution (default: snr)"},
         {'h', "h", "help", NULL, "show this help"}};
     finalproj_cli_values values;
     float q = 0.0f;
     int port = 0;
-    finalproj_scaling_mode scaling_mode = FINALPROJ_SCALING_SNR;
     int parse_result = finalproj_parse_command(
         argc, argv, "bit receive", options, CAG_ARRAY_SIZE(options), &values);
     if (parse_result <= 0) return parse_result < 0 ? 0 : 1;
@@ -436,27 +453,14 @@ static int finalproj_bit_receive(int argc, char** argv) {
         fprintf(stderr, "error: --port must be in [1, 65535]\n");
         return 1;
     }
-    if (values.scaling != NULL) {
-        if (strcmp(values.scaling, "snr") == 0)
-            scaling_mode = FINALPROJ_SCALING_SNR;
-        else if (strcmp(values.scaling, "resolution") == 0)
-            scaling_mode = FINALPROJ_SCALING_RESOLUTION;
-        else {
-            fprintf(stderr, "error: --scaling must be snr or resolution\n");
-            return 1;
-        }
-    }
-    if (!networkReceive(port, values.output, q, values.original,
-                        scaling_mode)) {
+    if (!networkReceive(port, values.output, q, values.original)) {
         fprintf(stderr, "error: receive command failed\n");
         return 1;
     }
     return 0;
 }
-
-/* ========================================================================= */
+#if WITH_J2K
 /*  j2k write / write-tiled / read / info                                    */
-/* ========================================================================= */
 
 static int finalproj_j2k_write(int argc, char** argv) {
     const cag_option options[] = {
@@ -590,11 +594,10 @@ static int finalproj_j2k_info(int argc, char** argv) {
     if (!ok) fprintf(stderr, "error: j2k info command failed\n");
     return ok ? 0 : 1;
 }
-
-/* ========================================================================= */
+#endif /* WITH_J2K */
 /*  Top-level dispatch                                                       */
-/* ========================================================================= */
 
+/** @brief Dispatches one command in the `bit` command group. */
 static int finalproj_dispatch_bit(int argc, char** argv) {
     if (argc < 1) goto unknown;
     if (strcmp(argv[0], "encode") == 0) return finalproj_bit_encode(argc, argv);
@@ -610,7 +613,9 @@ unknown:
     return 1;
 }
 
+/** @brief Dispatches one command in the optional `j2k` command group. */
 static int finalproj_dispatch_j2k(int argc, char** argv) {
+    #if WITH_J2K
     if (argc < 1) goto unknown;
     if (strcmp(argv[0], "write") == 0) return finalproj_j2k_write(argc, argv);
     if (strcmp(argv[0], "write-tiled") == 0)
@@ -621,8 +626,16 @@ unknown:
     fprintf(stderr, "error: unknown j2k subcommand: %s\n",
             argc >= 1 ? argv[0] : "(none)");
     return 1;
+    #else
+    (void)argc;(void)argv;
+    fprintf(stderr, "error: j2k commands are not available because build option `WITH_J2K` is not enabled\n");
+    return 1;
+    #endif /* WITH_J2K */
 }
 
+/**
+ * @brief Selects a top-level command group after removing argv[0].
+ */
 int finalproj_cli_run(int argc, char** argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0 ||
         strcmp(argv[1], "-h") == 0) {

@@ -9,7 +9,7 @@
 #include <math.h>
 #include <stddef.h>
 
-static int codec_round_symmetric_i32(double value, int32_t* rounded) {
+static int _round_symmetric_i32(double value, int32_t* rounded) {
     double magnitude;
     double result;
 
@@ -30,7 +30,7 @@ dic_status codec_quant_scalar_i32(int32_t* values, size_t count,
         return DIC_STATUS_INVALID_ARGUMENT;
 
     for (i = 0; i < count; ++i) {
-        if (!codec_round_symmetric_i32((double)values[i] / (double)step_size,
+        if (!_round_symmetric_i32((double)values[i] / (double)step_size,
                                        values + i))
             return DIC_STATUS_INVALID_ARGUMENT;
     }
@@ -47,7 +47,7 @@ dic_status codec_dequant_scalar_i32(int32_t* values, size_t count,
         return DIC_STATUS_INVALID_ARGUMENT;
 
     for (i = 0; i < count; ++i) {
-        if (!codec_round_symmetric_i32((double)values[i] * (double)step_size,
+        if (!_round_symmetric_i32((double)values[i] * (double)step_size,
                                        values + i))
             return DIC_STATUS_INVALID_ARGUMENT;
     }

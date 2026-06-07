@@ -5,6 +5,9 @@
  * Impl imageEncoder writes image.bit with the basic 5/3-DWT, quantization,
  * prediction, scan/EZT, and Huffman path; imageDecoder reconstructs
  * image_recon.pgm or image_recon.ppm and reports PSNR.
+ *
+ * The wrappers own all temporary image and encoded objects locally. Public
+ * callers exchange only paths, scalar options, and success metrics.
  */
 
 #include "finalproj/finalproj_codec.h"
@@ -18,13 +21,20 @@
 #include "codec/metrics.h"
 #include "fs/fs.h"
 #include "image_u8/image_u8.h"
+#if WITH_J2K
 #include "j2k/j2k_codestream.h"
 #include "j2k/j2k_image.h"
 #include "j2k/j2k_parse.h"
 #include "j2k/jp2_file.h"
+#endif /* WITH_J2K */
 #include "ppm/ppm.h"
 
-static long finalproj_file_size_bytes(const char* path) {
+/**
+ * @brief Returns a file length without consuming file contents.
+ * @param path Existing file path.
+ * @return Byte count, or -1 when the file cannot be opened or measured.
+ */
+static long _file_size_bytes(const char* path) {
     FILE* file = NULL;
     long size = -1;
 
@@ -36,6 +46,14 @@ static long finalproj_file_size_bytes(const char* path) {
     return size;
 }
 
+/**
+ * @brief Executes the assignment encode-to-DICW workflow.
+ *
+ * @code{.unparsed}
+ * input image -> in-memory encoded image -> DICW file
+ *                                      \-> file size -> bits/pixel
+ * @endcode
+ */
 double imageEncoder(const char* orgImageFileName, float quantizationStepSize,
                     const char* outputFileName) {
     dic_image_u8 original = {0};
@@ -59,7 +77,7 @@ double imageEncoder(const char* orgImageFileName, float quantizationStepSize,
 
     status = codec_basic_encode_image(
         original.data, original.width, original.height, original.channels,
-        FINALPROJ_LEVELS, quantizationStepSize, 0, &encoded);
+        FINALPROJ_LEVELS, quantizationStepSize, &encoded);
     if (status != DIC_STATUS_OK) {
         fprintf(stderr, "error: encode failed: %s\n",
                 dic_status_message(status));
@@ -72,7 +90,7 @@ double imageEncoder(const char* orgImageFileName, float quantizationStepSize,
         fprintf(stderr, "error: failed to write bitstream '%s': %s\n",
                 outputFileName, dic_status_message(status));
     } else {
-        bitstream_size = finalproj_file_size_bytes(outputFileName);
+        bitstream_size = _file_size_bytes(outputFileName);
         if (bitstream_size >= 0)
             bitrate = codec_metric_bitrate((size_t)bitstream_size * 8u,
                                            original.width, original.height);
@@ -83,6 +101,12 @@ double imageEncoder(const char* orgImageFileName, float quantizationStepSize,
     return bitrate;
 }
 
+/**
+ * @brief Executes full DICW decode, reference comparison, and image output.
+ *
+ * The quantization argument is checked against the binary32 value stored in
+ * the file header before any reconstruction is attempted.
+ */
 double imageDecoder(const char* bitstreamFileName, float quantizationStepSize,
                     const char* orgImageFileName) {
     codec_basic_encoded_image encoded = {0};
@@ -115,7 +139,7 @@ double imageDecoder(const char* bitstreamFileName, float quantizationStepSize,
         return -1.0;
     }
 
-    status = codec_basic_decode_image(&encoded, encoded.levels, 0, &decoded);
+    status = codec_basic_decode_image(&encoded, 0, &decoded);
     if (status != DIC_STATUS_OK) {
         fprintf(stderr, "error: decode failed: %s\n",
                 dic_status_message(status));
@@ -155,7 +179,8 @@ double imageDecoder(const char* bitstreamFileName, float quantizationStepSize,
     codec_basic_encoded_free(&encoded);
     return psnr;
 }
-
+#if WITH_J2K
+/** @brief Loads a PGM/PPM image and writes a raw JPEG 2000 codestream. */
 int imageWriteJ2K(const char* orgImageFileName, const char* outputFileName,
                   int quality) {
     dic_image_u8 image = {0};
@@ -180,6 +205,7 @@ int imageWriteJ2K(const char* orgImageFileName, const char* outputFileName,
     return status == DIC_STATUS_OK;
 }
 
+/** @brief Loads a PGM/PPM image and writes a JP2 container. */
 int imageWriteJP2(const char* orgImageFileName, const char* outputFileName,
                   int quality) {
     dic_image_u8 image = {0};
@@ -204,6 +230,7 @@ int imageWriteJP2(const char* orgImageFileName, const char* outputFileName,
     return status == DIC_STATUS_OK;
 }
 
+/** @brief Writes a tiled, layered JP2 container. */
 int imageWriteJP2Tiled(const char* orgImageFileName, const char* outputFileName,
                        int tileSize, int layers) {
     dic_image_u8 image = {0};
@@ -236,10 +263,12 @@ int imageWriteJP2Tiled(const char* orgImageFileName, const char* outputFileName,
     return status == DIC_STATUS_OK;
 }
 
+/** @brief Convenience wrapper selecting all raw-codestream quality layers. */
 int imageReadJ2K(const char* inputFileName, const char* outputFileName) {
     return imageReadJ2KLayers(inputFileName, outputFileName, 0);
 }
 
+/** @brief Decodes a requested raw-codestream quality prefix. */
 int imageReadJ2KLayers(const char* inputFileName, const char* outputFileName,
                        int maxLayers) {
     dic_image_u8 image = {0};
@@ -266,10 +295,12 @@ int imageReadJ2KLayers(const char* inputFileName, const char* outputFileName,
     return status == DIC_STATUS_OK;
 }
 
+/** @brief Convenience wrapper selecting all JP2 quality layers. */
 int imageReadJP2(const char* inputFileName, const char* outputFileName) {
     return imageReadJP2Layers(inputFileName, outputFileName, 0);
 }
 
+/** @brief Decodes a requested JP2 quality prefix. */
 int imageReadJP2Layers(const char* inputFileName, const char* outputFileName,
                        int maxLayers) {
     dic_image_u8 image = {0};
@@ -296,6 +327,7 @@ int imageReadJP2Layers(const char* inputFileName, const char* outputFileName,
     return status == DIC_STATUS_OK;
 }
 
+/** @brief Prints a normalized metadata view shared by J2K and JP2 readers. */
 static int finalproj_print_j2k_info(const j2k_codestream_info* info) {
     if (info == NULL) return 0;
     printf("width %u\n", (unsigned int)info->params.width);
@@ -315,6 +347,7 @@ static int finalproj_print_j2k_info(const j2k_codestream_info* info) {
     return 1;
 }
 
+/** @brief Reads and prints raw-codestream metadata. */
 int imageReadJ2KInfo(const char* inputFileName) {
     j2k_codestream_info info;
 
@@ -323,6 +356,7 @@ int imageReadJ2KInfo(const char* inputFileName) {
     return finalproj_print_j2k_info(&info);
 }
 
+/** @brief Reads and prints JP2-contained codestream metadata. */
 int imageReadJP2Info(const char* inputFileName) {
     j2k_codestream_info info;
 
@@ -331,18 +365,26 @@ int imageReadJP2Info(const char* inputFileName) {
     return finalproj_print_j2k_info(&info);
 }
 
+#endif /* WITH_J2K */
+
+/**
+ * @brief Parses DICW and reports fixed metadata plus payload accounting.
+ *
+ * Per-channel byte totals are derived from the same in-memory fields used by
+ * the serializer, so the report separates dominant, run, and refinement data.
+ */
 int imageReadBitInfo(const char* bitstreamFileName) {
     codec_basic_encoded_image encoded = {0};
     dic_status status;
     long file_size;
-    int ch, res;
+    int ch;
 
     if (bitstreamFileName == NULL) {
         fprintf(stderr, "error: invalid arguments to imageReadBitInfo\n");
         return 0;
     }
 
-    file_size = finalproj_file_size_bytes(bitstreamFileName);
+    file_size = _file_size_bytes(bitstreamFileName);
     if (file_size < 0) {
         fprintf(stderr, "error: cannot access '%s'\n", bitstreamFileName);
         return 0;
@@ -366,15 +408,21 @@ int imageReadBitInfo(const char* bitstreamFileName) {
 
     for (ch = 0; ch < encoded.channels; ++ch) {
         const codec_basic_channel_stream* stream = encoded.channel_streams + ch;
-        printf("channel_%d_resolutions %d\n", ch, stream->num_resolutions);
-
-        for (res = 0; res < stream->num_resolutions; ++res) {
-            const codec_basic_resolution_stream* rs = stream->resolutions + res;
-            printf("channel_%d_res_%d_bitplanes %d\n", ch, res,
-                   rs->num_bitplanes);
-            printf("channel_%d_res_%d_bytes    %zu\n", ch, res,
-                   codec_basic_resolution_byte_size(rs));
+        size_t dominant = 0u, runs = 0u, refinement = 0u;
+        int bp;
+        for (bp = 0; bp < stream->num_bitplanes; ++bp) {
+            const codec_scan_bitplane* current = stream->bitplanes + bp;
+            dominant += current->dominant_stream.byte_count;
+            runs += current->run_length_byte_count;
+            refinement += current->subordinate_byte_count;
         }
+        printf("channel_%d_bitplanes        %d\n", ch,
+               stream->num_bitplanes);
+        printf("channel_%d_dominant_bytes   %zu\n", ch, dominant);
+        printf("channel_%d_run_bytes        %zu\n", ch, runs);
+        printf("channel_%d_refinement_bytes %zu\n", ch, refinement);
+        printf("channel_%d_total_bytes      %zu\n", ch,
+               codec_basic_channel_byte_size(stream));
     }
 
     codec_basic_encoded_free(&encoded);

@@ -1,18 +1,30 @@
 #pragma once
 /**
  * @file scan.h
- * @brief EZW-style per-bitplane zerotree scan for progressive bitplane coding.
+ * @brief Full-plane zerotree significance and context refinement coding.
  *
- * Coefficients are encoded bitplane by bitplane (T = 2^bp) from MSB to LSB.
- * The number of bitplanes is auto-detected from the maximum coefficient
- * magnitude.  Each bitplane stores:
- *   - A significance (dominant) pass with EZT: Huffman-coded IZ / ZTR / POS /
- * NEG
- *   - A refinement (subordinate) pass: raw packed bits for already-significant
- *     coefficients
+ * Each coefficient plane is encoded from its most significant nonzero bit to
+ * bit zero. One @ref codec_scan_bitplane contains three logical payloads:
  *
- * Progressive decoding is achieved by decoding only the first N bitplanes,
- * with midpoint reconstruction applied for the first missing bitplane.
+ * @code{.unparsed}
+ * coefficient bit-plane
+ *        |
+ *        +--> dominant significance tokens
+ *        |      token stream -> IZ run folding -> fixed Huffman bytes
+ *        |                         |
+ *        |                         `-> Exp-Golomb run side stream
+ *        |
+ *        `--> subordinate refinement bits
+ *               -> adaptive arithmetic bytes when smaller
+ *               -> raw LSB-first bytes otherwise
+ *
+ * codec_scan_bitplane
+ * +------------------------+
+ * | dominant_stream        | Huffman-coded commands
+ * | run_length_bits        | Exp-Golomb payload for ZRUN commands
+ * | subordinate_bits       | raw or arithmetic refinement payload
+ * +------------------------+
+ * @endcode
  */
 
 #include <stddef.h>
@@ -25,64 +37,76 @@
 extern "C" {
 #endif
 
-/** Dominant-pass token emitted during the significance pass of each bitplane.
- */
+/** Symbols emitted by the dominant significance pass. */
 typedef enum codec_scan_token {
-  /** Isolated zero — insignificant at T, but at least one descendant is
-     significant. */
+  /** Insignificant coefficient whose descendants are not all insignificant. */
   DIC_SCAN_TOKEN_IZ = 0,
-  /** Zerotree root — insignificant at T, and all descendants are also
-     insignificant. */
+  /** Insignificant coefficient representing an insignificant descendant tree. */
   DIC_SCAN_TOKEN_ZTR = 1,
-  /** Positive significant — |coeff| >= T, sign positive. */
+  /** Newly significant positive coefficient. */
   DIC_SCAN_TOKEN_POS = 2,
-  /** Negative significant — |coeff| >= T, sign negative. */
+  /** Newly significant negative coefficient. */
   DIC_SCAN_TOKEN_NEG = 3,
-  /** Number of token kinds (Huffman alphabet size). */
-  DIC_SCAN_TOKEN_COUNT = 4
+  /** Command replacing a profitable run of five or more IZ tokens. */
+  DIC_SCAN_TOKEN_ZRUN = 4,
+  /** Number of token symbols in the fixed Huffman alphabet. */
+  DIC_SCAN_TOKEN_COUNT = 5
 } codec_scan_token;
 
-/** Encoded data for a single bitplane (threshold T = 2^bp). */
+/** Storage mode selected for subordinate refinement symbols. */
+typedef enum codec_scan_refinement_mode {
+  /** One LSB-first stored bit per refinement symbol. */
+  DIC_SCAN_REFINEMENT_RAW = 0,
+  /** Adaptive three-context binary arithmetic coding. */
+  DIC_SCAN_REFINEMENT_ARITHMETIC = 1
+} codec_scan_refinement_mode;
+
+/**
+ * @brief Encoded representation of one MSB-first quality layer.
+ *
+ * All pointer members are owned by the object and released by
+ * codec_scan_bitplane_free().
+ */
 typedef struct codec_scan_bitplane {
-  /** Number of dominant-pass tokens emitted at this bitplane. */
+  /** Expanded dominant token count before IZ run folding. */
   size_t dominant_token_count;
-  /** Huffman-coded dominant-pass token bitstream. */
+  /** Huffman command count after IZ run folding. */
+  size_t dominant_command_count;
+  /** Fixed-table Huffman payload for dominant commands. */
   dic_hw2_huffman_bitstream dominant_stream;
-  /** Raw packed refinement bits. */
+  /** Exp-Golomb side payload used by ZRUN commands. */
+  unsigned char* run_length_bits;
+  /** Number of meaningful bits in @ref run_length_bits. */
+  size_t run_length_bit_count;
+  /** Allocated/stored bytes in @ref run_length_bits. */
+  size_t run_length_byte_count;
+  /** Raw or arithmetic-coded subordinate refinement payload. */
   unsigned char* subordinate_bits;
-  /** Number of valid refinement bits (not bytes). */
+  /** Number of coefficients refined by this layer. */
+  size_t subordinate_symbol_count;
+  /** Number of meaningful bits in @ref subordinate_bits. */
   size_t subordinate_bit_count;
-  /** ceil(subordinate_bit_count / 8). */
+  /** Allocated/stored bytes in @ref subordinate_bits. */
   size_t subordinate_byte_count;
+  /** Interpretation of @ref subordinate_bits. */
+  codec_scan_refinement_mode subordinate_mode;
 } codec_scan_bitplane;
 
-/**
- * @brief Initializes a bitplane to an empty state.
- * @param bp Bitplane to initialize; NULL is ignored.
- */
-void codec_scan_bitplane_init(codec_scan_bitplane* bp);
+/** @brief Initializes an empty bit-plane object. */
+void codec_scan_bitplane_init(codec_scan_bitplane* bitplane);
+/** @brief Releases all bit-plane payloads and resets the object. */
+void codec_scan_bitplane_free(codec_scan_bitplane* bitplane);
 
 /**
- * @brief Frees all storage owned by a bitplane.
- * @param bp Bitplane to clear; NULL is ignored.
- */
-void codec_scan_bitplane_free(codec_scan_bitplane* bp);
-
-/**
- * @brief Encodes a quantized coefficient plane with per-bitplane EZT.
- *
- * The number of bitplanes is auto-detected from max|coefficient|.
- * If all coefficients are zero, *bitplane_count_out is set to 0 and
- * *bitplanes_out is set to NULL.
- *
- * @param plane      Quantized coefficient plane in packed subband layout.
- * @param width      Plane width.
- * @param height     Plane height.
- * @param levels     Number of DWT decomposition levels.
- * @param bitplanes_out  Output array of bitplanes (MSB-first); caller frees
- *                       each with codec_scan_bitplane_free() then frees the
- * array.
- * @param bitplane_count_out  Number of bitplanes written (0 if all-zero plane).
+ * @brief Encodes a packed DWT coefficient plane into MSB-first layers.
+ * @param plane Signed coefficients in row-major packed-subband order.
+ * @param width Plane width.
+ * @param height Plane height.
+ * @param levels Number of DWT levels represented by the packed plane.
+ * @param bitplanes_out Receives a calloc-owned array; release each element
+ * with codec_scan_bitplane_free(), then free the array.
+ * @param bitplane_count_out Receives the number of layers. An all-zero plane
+ * produces zero layers and a NULL array.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
 dic_status codec_scan_encode_plane(const int32_t* plane, int width, int height,
@@ -91,20 +115,14 @@ dic_status codec_scan_encode_plane(const int32_t* plane, int width, int height,
                                    int* bitplane_count_out);
 
 /**
- * @brief Decodes the first num_bitplanes of per-bitplane EZT data into a
- * coefficient plane.
- *
- * Midpoint reconstruction is applied when num_bitplanes < total_bitplane_count:
- * the first missing bitplane contributes 2^(bp-1) to each significant
- * coefficient.
- *
- * @param bitplanes             Array of bitplanes (MSB-first).
- * @param total_bitplane_count  Total number of bitplanes available.
- * @param num_bitplanes         Number of bitplanes to decode (1..total).
- * @param width                 Plane width.
- * @param height                Plane height.
- * @param levels                Number of DWT decomposition levels.
- * @param plane                 Output coefficient plane (zeroed on entry).
+ * @brief Decodes an MSB-first prefix into a packed coefficient plane.
+ * @param bitplanes Complete serialized layer array.
+ * @param total_bitplane_count Total layer count used to derive bit weights.
+ * @param num_bitplanes Prefix length to decode; must be positive.
+ * @param width Output plane width.
+ * @param height Output plane height.
+ * @param levels Packed DWT level count.
+ * @param plane Caller-owned output array of `width * height` coefficients.
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
 dic_status codec_scan_decode_plane(const codec_scan_bitplane* bitplanes,
@@ -112,82 +130,13 @@ dic_status codec_scan_decode_plane(const codec_scan_bitplane* bitplanes,
                                    int width, int height, int levels,
                                    int32_t* plane);
 
-/**
- * @brief Encodes coefficients in the subbands of one resolution level with
- * per-bitplane significance + refinement passes (no zerotree).
- *
- * Resolution 0 encodes the LL subband only. Resolution r ≥ 1 encodes the
- * three high-pass subbands (HL, LH, HH) at DWT level (levels - r + 1).
- *
- * The number of bitplanes is auto-detected from the maximum coefficient
- * magnitude within the encoded subbands. If all coefficients are zero,
- * *bitplane_count_out is set to 0 and *bitplanes_out is set to NULL.
- *
- * @param plane      Quantized coefficient plane in packed subband layout.
- * @param width      Full plane width.
- * @param height     Full plane height.
- * @param levels     Total DWT decomposition levels.
- * @param resolution Resolution level to encode (0..levels).
- * @param bitplanes_out  Output array of bitplanes (MSB-first); caller must
- *                       free each with codec_scan_bitplane_free(), then free
- *                       the array.
- * @param bitplane_count_out  Number of bitplanes written.
- * @return DIC_STATUS_OK on success, otherwise an error status.
- */
-dic_status codec_scan_encode_subbands(const int32_t* plane, int width,
-                                      int height, int levels, int resolution,
-                                      codec_scan_bitplane** bitplanes_out,
-                                      int* bitplane_count_out);
-
-/**
- * @brief Decodes per-resolution bitplane data and places coefficients into
- * a plane for a max_resolution-level IDWT.
- *
- * Midpoint reconstruction is applied when decode_bitplanes <
- * total_bitplane_count.
- *
- * @param bitplanes           Array of bitplanes (MSB-first) for this
- * resolution.
- * @param total_bitplane_count  Number of bitplanes available.
- * @param decode_bitplanes    Number of bitplanes to decode (1..total, or total
- * for all).
- * @param out_width           Output plane width (ll_w << max_resolution).
- * @param out_height          Output plane height (ll_h << max_resolution).
- * @param max_resolution      Total resolution levels for the output plane.
- * @param resolution          Which resolution this data represents
- * (0..max_resolution).
- * @param plane               Output coefficient plane (zeroed on entry).
- * @return DIC_STATUS_OK on success, otherwise an error status.
- */
-dic_status codec_scan_decode_subbands(const codec_scan_bitplane* bitplanes,
-                                      int total_bitplane_count,
-                                      int decode_bitplanes, int out_width,
-                                      int out_height, int max_resolution,
-                                      int resolution, int32_t* plane);
-
-/**
- * @brief Returns the number of magnitude bits needed to represent a signed
- * amplitude.
- * @param amplitude Signed coefficient amplitude.
- * @return Bit width, or 0 when amplitude is zero.
- */
+/** @brief Returns the magnitude bit width of a signed coefficient. */
 unsigned char codec_scan_amplitude_size(int32_t amplitude);
-
-/**
- * @brief Writes the current fixed Huffman code lengths (bits per symbol) into
- * @p lengths, which must be at least DIC_SCAN_TOKEN_COUNT bytes.
- *
- * Used when serializing a file header so the decoder can rebuild the identical
- * canonical tree.
- */
+/** @brief Exports the active fixed canonical Huffman code lengths. */
 void codec_scan_get_code_lengths(unsigned char lengths[DIC_SCAN_TOKEN_COUNT]);
-
 /**
- * @brief Rebuilds the fixed Huffman tree from externally-provided code lengths.
- *
- * After this call the shared singleton tree reflects @p lengths rather than
- * the compile-time default probabilities.  Called during deserialization so
- * the decoder matches the table that was used at encode time.
+ * @brief Rebuilds the fixed canonical Huffman table from serialized lengths.
+ * @param lengths One code length per @ref codec_scan_token.
  */
 void codec_scan_set_code_lengths(
     const unsigned char lengths[DIC_SCAN_TOKEN_COUNT]);
