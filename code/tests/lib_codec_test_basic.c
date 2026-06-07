@@ -15,12 +15,27 @@ int main(void) {
             source[(size_t)y * 32u + (size_t)x] =
                 (uint8_t)(20 + x * 2 + y * 3 + ((x + y) % 7));
 
-    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 4.0f,
-                                        &encoded) == DIC_STATUS_OK);
+    DIC_EXPECT(codec_basic_encode_image(source, 32, 32, 1, 3, 4.0f, &encoded) ==
+               DIC_STATUS_OK);
     DIC_EXPECT(encoded.width == 32);
     DIC_EXPECT(encoded.height == 32);
     DIC_EXPECT(encoded.channels == 1);
     DIC_EXPECT(encoded.channel_streams[0].num_bitplanes > 0);
+    {
+        size_t counts[DIC_SCAN_TOKEN_COUNT];
+        size_t count_total = 0u;
+        size_t command_total = 0u;
+        int symbol;
+
+        codec_basic_huffman_symbol_counts(&encoded, counts);
+        for (symbol = 0; symbol < DIC_SCAN_TOKEN_COUNT; ++symbol)
+            count_total += counts[symbol];
+        for (bp = 0; bp < encoded.channel_streams[0].num_bitplanes; ++bp)
+            command_total +=
+                encoded.channel_streams[0].bitplanes[bp].dominant_command_count;
+        DIC_EXPECT(count_total > 0u);
+        DIC_EXPECT(count_total == command_total);
+    }
 
     for (bp = 1; bp <= encoded.channel_streams[0].num_bitplanes; ++bp) {
         dic_image_u8 decoded = {0};

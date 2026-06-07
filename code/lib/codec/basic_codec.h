@@ -19,7 +19,7 @@
  *        `--> codec_basic_encoded_image
  * @endcode
  *
- * This header describes the in-memory representation. DICW v7 file layout is
+ * This header describes the in-memory representation. DICW v8 file layout is
  * documented in basic_file.h.
  */
 
@@ -132,8 +132,13 @@ dic_status codec_basic_encode_image(const uint8_t* input, int width, int height,
  * @return DIC_STATUS_OK on success, otherwise an error status.
  */
 dic_status codec_basic_decode_image(const codec_basic_encoded_image* encoded,
-                                    int num_bitplanes,
-                                    dic_image_u8* decoded);
+                                    int num_bitplanes, dic_image_u8* decoded);
+
+/**
+ * @brief Sums Huffman command frequencies across all channels and bitplanes.
+ */
+void codec_basic_huffman_symbol_counts(const codec_basic_encoded_image* encoded,
+                                       size_t counts[DIC_SCAN_TOKEN_COUNT]);
 
 #ifdef __cplusplus
 }

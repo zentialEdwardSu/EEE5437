@@ -19,6 +19,13 @@
 #include "codec/subband.h"
 #include "wavelet/dic_dwt53.h"
 
+const double codec_scan_fixed_probs[DIC_SCAN_TOKEN_COUNT] = {
+    0.50,  /* IZ */
+    0.125, /* ZTR */
+    0.125, /* POS */
+    0.125, /* NEG */
+    0.125  /* ZRUN */
+};
 
 inline static size_t codec_scan_index(int width, int x, int y) {
   return ((size_t)y * (size_t)width) + (size_t)x;
@@ -306,7 +313,8 @@ static dic_status codec_scan_write_ue(codec_scan_bit_writer* writer,
   if (codec_scan_bit_writer_ensure(writer->bit_count + width * 2u, writer) !=
       DIC_STATUS_OK)
     return DIC_STATUS_MEMORY_ERROR;
-  for (i = 1u; i < width; ++i) codec_scan_bit_write(0, writer);
+  for (i = 1u; i < width; ++i)
+    codec_scan_bit_write(0, writer);
   for (i = width; i > 0u; --i)
     codec_scan_bit_write((int)((code_num >> (i - 1u)) & 1u), writer);
   return DIC_STATUS_OK;
@@ -340,9 +348,9 @@ static int codec_scan_read_ue(codec_scan_bit_reader* reader, size_t* value) {
  * A ZRUN represents `5 + ue_value` expanded IZ tokens. The command itself is
  * Huffman-coded; only ue_value is written to the run side stream.
  */
-static dic_status codec_scan_rle_commands(
-    const codec_scan_token_buffer* tokens, codec_scan_token_buffer* commands,
-    codec_scan_bit_writer* runs) {
+static dic_status codec_scan_rle_commands(const codec_scan_token_buffer* tokens,
+                                          codec_scan_token_buffer* commands,
+                                          codec_scan_bit_writer* runs) {
   size_t i = 0u;
   dic_status status = DIC_STATUS_OK;
   while (i < tokens->count) {
@@ -351,8 +359,7 @@ static dic_status codec_scan_rle_commands(
       while (i + run < tokens->count &&
              tokens->tokens[i + run] == (unsigned char)DIC_SCAN_TOKEN_IZ)
         ++run;
-      if (run >= 5u &&
-          3u + codec_scan_ue_bit_count(run - 5u) < run) {
+      if (run >= 5u && 3u + codec_scan_ue_bit_count(run - 5u) < run) {
         status = codec_scan_token_buffer_append(
             commands, (unsigned char)DIC_SCAN_TOKEN_ZRUN);
         if (status == DIC_STATUS_OK)
@@ -374,10 +381,10 @@ static dic_status codec_scan_rle_commands(
 }
 
 /** @brief Inverts ZRUN commands and validates exact token/bit consumption. */
-static dic_status codec_scan_expand_commands(
-    const unsigned char* commands, size_t command_count,
-    const unsigned char* run_bytes, size_t run_bits, size_t token_count,
-    unsigned char** tokens_out) {
+static dic_status
+codec_scan_expand_commands(const unsigned char* commands, size_t command_count,
+                           const unsigned char* run_bytes, size_t run_bits,
+                           size_t token_count, unsigned char** tokens_out) {
   codec_scan_bit_reader reader;
   unsigned char* tokens;
   size_t command;
@@ -474,33 +481,6 @@ static dic_status codec_scan_sig_order_append(codec_scan_sig_order* order,
   return DIC_STATUS_OK;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Fixed Huffman table (JPEG Annex K style)                                  */
-/* -------------------------------------------------------------------------- */
-
-/**
- * @brief Fixed token probabilities derived from expected EZW statistics.
- *
- * IZ (Isolated Zero) dominates because most coefficients are insignificant
- * at any given bitplane.  ZTR (Zerotree Root) appears only in full-plane mode
- * (~8%).  POS and NEG are symmetric rare events (~6% each).
- *
- * These probabilities are used to build a single shared Huffman tree at init
- * time, avoiding per-bitplane tree construction entirely.
- *
- * Each probability can be overridden at compile time by defining the
- * corresponding macro before including this translation unit, e.g.:
- *   -DCODEC_SCAN_PROB_IZ=0.75 -DCODEC_SCAN_PROB_POS=0.10
- */
-
-static const double codec_scan_fixed_probs[DIC_SCAN_TOKEN_COUNT] = {
-    0.50,  /* IZ */
-    0.125, /* ZTR */
-    0.125, /* POS */
-    0.125, /* NEG */
-    0.125  /* ZRUN */
-};
-
 static dic_hw2_huffman_tree codec_scan_fixed_tree;
 static int codec_scan_fixed_tree_ready = 0;
 
@@ -532,7 +512,8 @@ void codec_scan_set_code_lengths(
   int i;
 
   /* p[i] = 2^(-L[i]); these satisfy Kraft equality for valid code-length
-   * sets and produce the identical canonical tree via the standard builder. */
+   * sets and produce the identical canonical tree via the standard builder.
+   */
   for (i = 0; i < DIC_SCAN_TOKEN_COUNT; ++i)
     probs[i] = 1.0 / (double)(1u << (unsigned)lengths[i]);
 
@@ -554,9 +535,9 @@ static void codec_scan_write_token_fn(void* element, unsigned int symbol) {
   *(unsigned char*)element = (unsigned char)symbol;
 }
 
-static dic_status codec_scan_huffman_encode(
-    const unsigned char* tokens, size_t token_count,
-    dic_hw2_huffman_bitstream* bitstream) {
+static dic_status
+codec_scan_huffman_encode(const unsigned char* tokens, size_t token_count,
+                          dic_hw2_huffman_bitstream* bitstream) {
   const dic_hw2_huffman_tree* tree = codec_scan_get_fixed_tree();
   dic_hw2_huffman_bitstream_init(bitstream);
   return dic_hw2_huffman_encode_mapped(tree, tokens, token_count,
@@ -564,9 +545,9 @@ static dic_status codec_scan_huffman_encode(
                                        bitstream);
 }
 
-static dic_status codec_scan_huffman_decode(
-    const dic_hw2_huffman_bitstream* bitstream, unsigned char* tokens,
-    size_t token_count) {
+static dic_status
+codec_scan_huffman_decode(const dic_hw2_huffman_bitstream* bitstream,
+                          unsigned char* tokens, size_t token_count) {
   const dic_hw2_huffman_tree* tree = codec_scan_get_fixed_tree();
   return dic_hw2_huffman_decode_mapped(tree, bitstream, token_count, tokens,
                                        sizeof(tokens[0]),
@@ -686,10 +667,7 @@ static dic_status codec_scan_encode_significance_pass(
 
 /*  Refinement pass encoder (one bitplane)                                    */
 
-enum {
-  CODEC_SCAN_ARITH_CONTEXTS = 3,
-  CODEC_SCAN_ARITH_SCALE = 16384
-};
+enum { CODEC_SCAN_ARITH_CONTEXTS = 3, CODEC_SCAN_ARITH_SCALE = 16384 };
 
 /**
  * @brief Adaptive zero/one frequencies for refinement contexts.
@@ -750,9 +728,10 @@ static int codec_scan_has_significant_neighbor(const unsigned char* significant,
  * two is used after a coefficient has already received refinement history.
  * Output is written through the same LSB-first bit writer used by raw mode.
  */
-static dic_status codec_scan_arithmetic_encode(
-    const unsigned char* bits, const unsigned char* contexts, size_t count,
-    codec_scan_bit_writer* writer) {
+static dic_status codec_scan_arithmetic_encode(const unsigned char* bits,
+                                               const unsigned char* contexts,
+                                               size_t count,
+                                               codec_scan_bit_writer* writer) {
   const uint64_t top = 0xffffffffULL;
   const uint64_t half = 0x80000000ULL;
   const uint64_t first_qtr = 0x40000000ULL;
@@ -823,9 +802,11 @@ static dic_status codec_scan_arithmetic_encode(
 /**
  * @brief Decodes the exact arithmetic refinement payload.
  */
-static dic_status codec_scan_arithmetic_decode(
-    const unsigned char* bytes, size_t bit_count,
-    const unsigned char* contexts, size_t count, unsigned char* bits) {
+static dic_status codec_scan_arithmetic_decode(const unsigned char* bytes,
+                                               size_t bit_count,
+                                               const unsigned char* contexts,
+                                               size_t count,
+                                               unsigned char* bits) {
   const uint64_t top = 0xffffffffULL;
   const uint64_t half = 0x80000000ULL;
   const uint64_t first_qtr = 0x40000000ULL;
@@ -840,10 +821,9 @@ static dic_status codec_scan_arithmetic_decode(
   codec_scan_arith_model_init(&model);
   codec_scan_bit_reader_init(&reader, bytes, bit_count);
   for (i = 0u; i < 32u; ++i)
-    value = (value << 1u) |
-            (reader.bits_read < reader.bit_count
-                 ? (uint64_t)codec_scan_bit_read(&reader)
-                 : 0u);
+    value = (value << 1u) | (reader.bits_read < reader.bit_count
+                                 ? (uint64_t)codec_scan_bit_read(&reader)
+                                 : 0u);
 
   for (i = 0u; i < count; ++i) {
     unsigned int context = contexts[i];
@@ -912,13 +892,12 @@ static dic_status codec_scan_encode_refinement_pass(
     uint32_t mag = plane[idx] < 0 ? (uint32_t)(-(plane[idx] + 1)) + 1u
                                   : (uint32_t)plane[idx];
     bits[i] = (unsigned char)((mag >> bp) & 1u);
-    contexts[i] =
-        refinement_age[idx] > 0u
-            ? 2u
-            : (unsigned char)(codec_scan_has_significant_neighbor(
-                                  significant, width, height, idx)
-                                  ? 1u
-                                  : 0u);
+    contexts[i] = refinement_age[idx] > 0u
+                      ? 2u
+                      : (unsigned char)(codec_scan_has_significant_neighbor(
+                                            significant, width, height, idx)
+                                            ? 1u
+                                            : 0u);
     if (refinement_age[idx] < 255u) ++refinement_age[idx];
   }
 
@@ -983,13 +962,12 @@ static dic_status codec_scan_decode_refinement_pass(
   }
   for (i = 0; i < refinement_count; ++i) {
     size_t idx = sig_order[i];
-    contexts[i] =
-        refinement_age[idx] > 0u
-            ? 2u
-            : (unsigned char)(codec_scan_has_significant_neighbor(
-                                  significant, width, height, idx)
-                                  ? 1u
-                                  : 0u);
+    contexts[i] = refinement_age[idx] > 0u
+                      ? 2u
+                      : (unsigned char)(codec_scan_has_significant_neighbor(
+                                            significant, width, height, idx)
+                                            ? 1u
+                                            : 0u);
   }
   if (bitplane->subordinate_mode == DIC_SCAN_REFINEMENT_RAW) {
     codec_scan_bit_reader reader;
@@ -1001,20 +979,18 @@ static dic_status codec_scan_decode_refinement_pass(
                                bitplane->subordinate_bit_count);
     for (i = 0u; i < refinement_count; ++i)
       bits[i] = (unsigned char)codec_scan_bit_read(&reader);
-  } else if (bitplane->subordinate_mode ==
-             DIC_SCAN_REFINEMENT_ARITHMETIC) {
+  } else if (bitplane->subordinate_mode == DIC_SCAN_REFINEMENT_ARITHMETIC) {
     codec_scan_bit_writer canonical;
-    status = codec_scan_arithmetic_decode(
-        bitplane->subordinate_bits, bitplane->subordinate_bit_count, contexts,
-        refinement_count, bits);
+    status = codec_scan_arithmetic_decode(bitplane->subordinate_bits,
+                                          bitplane->subordinate_bit_count,
+                                          contexts, refinement_count, bits);
     if (status != DIC_STATUS_OK) goto cleanup;
     codec_scan_bit_writer_init(&canonical);
     status = codec_scan_arithmetic_encode(bits, contexts, refinement_count,
                                           &canonical);
     if (status == DIC_STATUS_OK &&
         (canonical.bit_count != bitplane->subordinate_bit_count ||
-         (canonical.bit_count + 7u) / 8u !=
-             bitplane->subordinate_byte_count ||
+         (canonical.bit_count + 7u) / 8u != bitplane->subordinate_byte_count ||
          memcmp(canonical.bytes, bitplane->subordinate_bits,
                 (canonical.bit_count + 7u) / 8u) != 0))
       status = DIC_HW4_FORMAT_ERROR;
@@ -1043,9 +1019,12 @@ cleanup:
 /* -------------------------------------------------------------------------- */
 
 void codec_scan_bitplane_init(codec_scan_bitplane* bp) {
+  int symbol;
   if (bp == NULL) return;
   bp->dominant_token_count = 0u;
   bp->dominant_command_count = 0u;
+  for (symbol = 0; symbol < DIC_SCAN_TOKEN_COUNT; ++symbol)
+    bp->dominant_symbol_counts[symbol] = 0u;
   dic_hw2_huffman_bitstream_init(&bp->dominant_stream);
   bp->run_length_bits = NULL;
   bp->run_length_bit_count = 0u;
@@ -1192,6 +1171,15 @@ dic_status codec_scan_encode_plane(const int32_t* plane, int width, int height,
 
     cur->dominant_token_count = token_buf.count;
     cur->dominant_command_count = command_buf.count;
+    {
+      size_t command_index;
+      for (command_index = 0u; command_index < command_buf.count;
+           ++command_index) {
+        unsigned int symbol = command_buf.tokens[command_index];
+        if (symbol < DIC_SCAN_TOKEN_COUNT)
+          ++cur->dominant_symbol_counts[symbol];
+      }
+    }
     cur->run_length_bits = run_writer.bytes;
     cur->run_length_bit_count = run_writer.bit_count;
     cur->run_length_byte_count = (run_writer.bit_count + 7u) / 8u;
@@ -1212,7 +1200,8 @@ dic_status codec_scan_encode_plane(const int32_t* plane, int width, int height,
 
   if (status != DIC_STATUS_OK) {
     int i;
-    for (i = 0; i < total_bp; ++i) codec_scan_bitplane_free(bps + i);
+    for (i = 0; i < total_bp; ++i)
+      codec_scan_bitplane_free(bps + i);
     free(bps);
     return status;
   }
@@ -1264,9 +1253,9 @@ dic_status codec_scan_decode_plane(const codec_scan_bitplane* bitplanes,
     /* The first bitplane is MSB (max_bp). We don't need the absolute bp
      * value for decoding; the reconstruction is additive. Each bitplane
      * contributes its threshold to newly-significant coefficients.
-     * We compute threshold from bp_idx and global max_bp: since we no longer
-     * store max_bp explicitly in the bitplane struct, we compute it from
-     * the total count. */
+     * We compute threshold from bp_idx and global max_bp: since we no
+     * longer store max_bp explicitly in the bitplane struct, we compute it
+     * from the total count. */
     int bp = total_bitplane_count - 1 - bp_idx;
     int32_t threshold = (int32_t)(1u << (unsigned)bp);
     unsigned char* tokens = NULL;
@@ -1400,9 +1389,9 @@ dic_status codec_scan_decode_plane(const codec_scan_bitplane* bitplanes,
       goto cleanup;
     }
 
-    status = codec_scan_decode_refinement_pass(
-        cur, width, height, bp, plane, significant, refinement_age,
-        sig_order.indices, sig_before);
+    status = codec_scan_decode_refinement_pass(cur, width, height, bp, plane,
+                                               significant, refinement_age,
+                                               sig_order.indices, sig_before);
     if (status != DIC_STATUS_OK) goto cleanup;
   }
 

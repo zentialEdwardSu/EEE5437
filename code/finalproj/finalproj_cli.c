@@ -66,12 +66,12 @@ static void finalproj_print_usage(void) {
         "usage:\n"
         "  finalproj bit encode   --input <file> --quant <q> [--output "
         "<file>]\n"
-        "  finalproj bit decode   --bitstream <file> --quant <q> --original "
+        "  finalproj bit decode   --bitstream <file> --original "
         "<file>\n"
         "  finalproj bit codec    --input <file> --quant <q>\n"
         "  finalproj bit send     --input <file> --host <HOST> --port <PORT> "
         "--quant <q> [--rate <BYTES/SEC>]\n"
-        "  finalproj bit receive  --port <PORT> --output <file> --quant <q> "
+        "  finalproj bit receive  --port <PORT> --output <file> "
         "[--original <file>]\n"
         "  finalproj bit info     --bitstream <file>\n"
 #if WITH_J2K
@@ -306,23 +306,18 @@ static int finalproj_bit_encode(int argc, char** argv) {
 static int finalproj_bit_decode(int argc, char** argv) {
     const cag_option options[] = {
         {'b', "b", "bitstream", "FILE", "input basic codec bitstream"},
-        {'q', "q", "quant", "VALUE", "positive quantization step"},
         {'r', "r", "original", "FILE", "original PGM or PPM image"},
         {'h', "h", "help", NULL, "show this help"}};
     finalproj_cli_values values;
     double psnr;
-    float q = 0.0f;
     int parse_result = finalproj_parse_command(
         argc, argv, "bit decode", options, CAG_ARRAY_SIZE(options), &values);
     if (parse_result <= 0) return parse_result < 0 ? 0 : 1;
-    if (values.bitstream == NULL || values.original == NULL ||
-        !finalproj_parse_quant(values.quant, &q)) {
-        fprintf(stderr,
-                "error: --bitstream, --original, and positive --quant are "
-                "required\n");
+    if (values.bitstream == NULL || values.original == NULL) {
+        fprintf(stderr, "error: --bitstream and --original are required\n");
         return 1;
     }
-    psnr = imageDecoder(values.bitstream, q, values.original);
+    psnr = imageDecoder(values.bitstream, values.original);
     if (psnr < 0.0) {
         fprintf(stderr, "error: decode command failed\n");
         return 1;
@@ -340,7 +335,8 @@ static int finalproj_bit_codec(int argc, char** argv) {
         {'q', "q", "quant", "VALUE", "positive quantization step"},
         {'h', "h", "help", NULL, "show this help"}};
     finalproj_cli_values values;
-    double bitrate, psnr;
+    finalproj_codec_report report;
+    const char* output_path;
     float q = 0.0f;
     int parse_result = finalproj_parse_command(
         argc, argv, "bit codec", options, CAG_ARRAY_SIZE(options), &values);
@@ -349,16 +345,25 @@ static int finalproj_bit_codec(int argc, char** argv) {
         fprintf(stderr, "error: --input and positive --quant are required\n");
         return 1;
     }
-    bitrate = imageEncoder(values.input, q, FINALPROJ_BITSTREAM_PATH);
-    psnr = bitrate >= 0.0
-               ? imageDecoder(FINALPROJ_BITSTREAM_PATH, q, values.input)
-               : -1.0;
-    if (bitrate < 0.0 || psnr < 0.0) {
+    output_path = FINALPROJ_BITSTREAM_PATH;
+    if (!imageCodecReport(values.input, q, output_path, &report)) {
         fprintf(stderr, "error: codec roundtrip failed\n");
         return 1;
     }
-    printf("Bitrate %.6f\n", bitrate);
-    printf("PSNR %.6f\n", psnr);
+    printf("{\"q\":%.9g,\"bitrate\":%.9g,\"compression_ratio\":%.9g,", q,
+           report.bitrate, report.compression_ratio);
+    if (isinf(report.psnr))
+        printf("\"psnr\":null,\"lossless\":true,");
+    else
+        printf("\"psnr\":%.9g,\"lossless\":false,", report.psnr);
+    printf("\"huffman_counts\":[%zu,%zu,%zu,%zu,%zu],",
+           report.huffman_symbol_counts[0], report.huffman_symbol_counts[1],
+           report.huffman_symbol_counts[2], report.huffman_symbol_counts[3],
+           report.huffman_symbol_counts[4]);
+    printf("\"huffman_probabilities\":[%.12g,%.12g,%.12g,%.12g,%.12g]}\n",
+           report.huffman_probabilities[0], report.huffman_probabilities[1],
+           report.huffman_probabilities[2], report.huffman_probabilities[3],
+           report.huffman_probabilities[4]);
     return 0;
 }
 
@@ -384,7 +389,7 @@ static int finalproj_bit_info(int argc, char** argv) {
 
 /*  bit send / receive via TCP by libnet                       */
 
-/** @brief Handles staged DICQ encoding and TCP transmission. */
+/** @brief Handles staged DICW encoding and TCP transmission. */
 static int finalproj_bit_send(int argc, char** argv) {
     const cag_option options[] = {
         {'i', "i", "input", "FILE", "input PGM or PPM image"},
@@ -427,33 +432,28 @@ static int finalproj_bit_send(int argc, char** argv) {
     return 0;
 }
 
-/** @brief Handles incremental DICQ TCP reception and reconstruction. */
+/** @brief Handles incremental DICW TCP reception and reconstruction. */
 static int finalproj_bit_receive(int argc, char** argv) {
     const cag_option options[] = {
         {'p', NULL, "port", "PORT", "listen port"},
         {'o', "o", "output", "FILE", "output PGM or PPM image"},
-        {'q', "q", "quant", "VALUE",
-         "positive quantization step (must match sender)"},
         {'r', "r", "original", "FILE",
          "optional original image for PSNR comparison"},
         {'h', "h", "help", NULL, "show this help"}};
     finalproj_cli_values values;
-    float q = 0.0f;
     int port = 0;
     int parse_result = finalproj_parse_command(
         argc, argv, "bit receive", options, CAG_ARRAY_SIZE(options), &values);
     if (parse_result <= 0) return parse_result < 0 ? 0 : 1;
-    if (values.port_str == NULL || values.output == NULL ||
-        !finalproj_parse_quant(values.quant, &q)) {
-        fprintf(stderr,
-                "error: --port, --output, and positive --quant are required\n");
+    if (values.port_str == NULL || values.output == NULL) {
+        fprintf(stderr, "error: --port and --output are required\n");
         return 1;
     }
     if (!finalproj_parse_int_range(values.port_str, 1, 65535, &port)) {
         fprintf(stderr, "error: --port must be in [1, 65535]\n");
         return 1;
     }
-    if (!networkReceive(port, values.output, q, values.original)) {
+    if (!networkReceive(port, values.output, values.original)) {
         fprintf(stderr, "error: receive command failed\n");
         return 1;
     }
@@ -615,7 +615,7 @@ unknown:
 
 /** @brief Dispatches one command in the optional `j2k` command group. */
 static int finalproj_dispatch_j2k(int argc, char** argv) {
-    #if WITH_J2K
+#if WITH_J2K
     if (argc < 1) goto unknown;
     if (strcmp(argv[0], "write") == 0) return finalproj_j2k_write(argc, argv);
     if (strcmp(argv[0], "write-tiled") == 0)
@@ -626,11 +626,14 @@ unknown:
     fprintf(stderr, "error: unknown j2k subcommand: %s\n",
             argc >= 1 ? argv[0] : "(none)");
     return 1;
-    #else
-    (void)argc;(void)argv;
-    fprintf(stderr, "error: j2k commands are not available because build option `WITH_J2K` is not enabled\n");
+#else
+    (void)argc;
+    (void)argv;
+    fprintf(stderr,
+            "error: j2k commands are not available because build option "
+            "`WITH_J2K` is not enabled\n");
     return 1;
-    #endif /* WITH_J2K */
+#endif /* WITH_J2K */
 }
 
 /**

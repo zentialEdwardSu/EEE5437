@@ -39,9 +39,11 @@ extern "C" {
 
 /** Symbols emitted by the dominant significance pass. */
 typedef enum codec_scan_token {
-  /** Insignificant coefficient whose descendants are not all insignificant. */
+  /** Insignificant coefficient whose descendants are not all insignificant.
+   */
   DIC_SCAN_TOKEN_IZ = 0,
-  /** Insignificant coefficient representing an insignificant descendant tree. */
+  /** Insignificant coefficient representing an insignificant descendant tree.
+   */
   DIC_SCAN_TOKEN_ZTR = 1,
   /** Newly significant positive coefficient. */
   DIC_SCAN_TOKEN_POS = 2,
@@ -52,6 +54,9 @@ typedef enum codec_scan_token {
   /** Number of token symbols in the fixed Huffman alphabet. */
   DIC_SCAN_TOKEN_COUNT = 5
 } codec_scan_token;
+
+/** Default probabilities used to construct the fixed Huffman table. */
+extern const double codec_scan_fixed_probs[DIC_SCAN_TOKEN_COUNT];
 
 /** Storage mode selected for subordinate refinement symbols. */
 typedef enum codec_scan_refinement_mode {
@@ -72,6 +77,8 @@ typedef struct codec_scan_bitplane {
   size_t dominant_token_count;
   /** Huffman command count after IZ run folding. */
   size_t dominant_command_count;
+  /** Per-symbol counts for the commands sent to the Huffman encoder. */
+  size_t dominant_symbol_counts[DIC_SCAN_TOKEN_COUNT];
   /** Fixed-table Huffman payload for dominant commands. */
   dic_hw2_huffman_bitstream dominant_stream;
   /** Exp-Golomb side payload used by ZRUN commands. */

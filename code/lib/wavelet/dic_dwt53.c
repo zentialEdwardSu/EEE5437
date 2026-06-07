@@ -3,12 +3,12 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-int dic_dwt53_low_size(int length)
+inline int dic_dwt53_low_size(int length)
 {
     return (length + 1) / 2;
 }
 
-int dic_dwt53_high_size(int length)
+inline int dic_dwt53_high_size(int length)
 {
     return length / 2;
 }
@@ -37,14 +37,14 @@ dic_status dic_dwt53_validate_levels(int width, int height, int levels)
     return DIC_STATUS_OK;
 }
 
-static int32_t dic_dwt53_floor_div2(int32_t value)
+static inline int32_t dic_dwt53_floor_div2(int32_t value)
 {
     if (value >= 0)
         return value / 2;
     return -(((-value) + 1) / 2);
 }
 
-static int32_t dic_dwt53_floor_div4(int32_t value)
+static inline int32_t dic_dwt53_floor_div4(int32_t value)
 {
     if (value >= 0)
         return value / 4;
@@ -69,19 +69,19 @@ static dic_status dic_dwt53_forward_1d(int32_t *samples, int length, int32_t *sc
     low = scratch;
     high = scratch + low_count;
 
-    for (i = 0; i < low_count; ++i)
+    for (i = 0; i < low_count; i++)
         low[i] = samples[i * 2];
-    for (i = 0; i < high_count; ++i)
+    for (i = 0; i < high_count; i++)
         high[i] = samples[(i * 2) + 1];
 
-    for (i = 0; i < high_count; ++i)
+    for (i = 0; i < high_count; i++)
     {
         int32_t left = low[i];
         int32_t right = low[(i + 1) < low_count ? (i + 1) : (low_count - 1)];
         high[i] -= dic_dwt53_floor_div2(left + right);
     }
 
-    for (i = 0; i < low_count; ++i)
+    for (i = 0; i < low_count; i++)
     {
         int32_t left;
         int32_t right;
@@ -94,9 +94,9 @@ static dic_status dic_dwt53_forward_1d(int32_t *samples, int length, int32_t *sc
         low[i] += dic_dwt53_floor_div4(left + right + 2);
     }
 
-    for (i = 0; i < low_count; ++i)
+    for (i = 0; i < low_count; i++)
         samples[i] = low[i];
-    for (i = 0; i < high_count; ++i)
+    for (i = 0; i < high_count; i++)
         samples[low_count + i] = high[i];
 
     return DIC_STATUS_OK;
@@ -120,12 +120,12 @@ static dic_status dic_dwt53_inverse_1d(int32_t *samples, int length, int32_t *sc
     low = scratch;
     high = scratch + low_count;
 
-    for (i = 0; i < low_count; ++i)
+    for (i = 0; i < low_count; i++)
         low[i] = samples[i];
-    for (i = 0; i < high_count; ++i)
+    for (i = 0; i < high_count; i++)
         high[i] = samples[low_count + i];
 
-    for (i = 0; i < low_count; ++i)
+    for (i = 0; i < low_count; i++)
     {
         int32_t left;
         int32_t right;
@@ -138,14 +138,14 @@ static dic_status dic_dwt53_inverse_1d(int32_t *samples, int length, int32_t *sc
         low[i] -= dic_dwt53_floor_div4(left + right + 2);
     }
 
-    for (i = 0; i < high_count; ++i)
+    for (i = 0; i < high_count; i++)
     {
         int32_t left = low[i];
         int32_t right = low[(i + 1) < low_count ? (i + 1) : (low_count - 1)];
         high[i] += dic_dwt53_floor_div2(left + right);
     }
 
-    for (i = 0; i < high_count; ++i)
+    for (i = 0; i < high_count; i++)
     {
         samples[i * 2] = low[i];
         samples[(i * 2) + 1] = high[i];
@@ -167,7 +167,7 @@ static dic_status dic_dwt53_transform_rows(
 {
     int y;
 
-    for (y = 0; y < height; ++y)
+    for (y = 0; y < height; y++)
     {
         int32_t *row = plane + ((size_t)y * (size_t)stride);
         dic_status status = inverse
@@ -196,7 +196,7 @@ static dic_status dic_dwt53_transform_columns(
     {
         dic_status status;
 
-        for (y = 0; y < height; ++y)
+        for (y = 0; y < height; y++)
             scratch[y] = plane[((size_t)y * (size_t)stride) + (size_t)x];
 
         status = inverse
@@ -205,7 +205,7 @@ static dic_status dic_dwt53_transform_columns(
         if (status != DIC_STATUS_OK)
             return status;
 
-        for (y = 0; y < height; ++y)
+        for (y = 0; y < height; y++)
             plane[((size_t)y * (size_t)stride) + (size_t)x] = scratch[y];
     }
 

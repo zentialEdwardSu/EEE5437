@@ -76,8 +76,8 @@ dic_status codec_basic_encoded_alloc_streams(codec_basic_encoded_image* encoded,
                                              float quant_step) {
     dic_status status;
     if (encoded == NULL) return DIC_STATUS_INVALID_ARGUMENT;
-    status =
-        codec_basic_validate_params(width, height, channels, levels, quant_step);
+    status = codec_basic_validate_params(width, height, channels, levels,
+                                         quant_step);
     if (status != DIC_STATUS_OK) return status;
 
     codec_basic_encoded_free(encoded);
@@ -137,8 +137,8 @@ dic_status codec_basic_encode_image(const uint8_t* input, int width, int height,
     int channel;
 
     if (input == NULL || encoded == NULL) return DIC_STATUS_INVALID_ARGUMENT;
-    status =
-        codec_basic_validate_params(width, height, channels, levels, quant_step);
+    status = codec_basic_validate_params(width, height, channels, levels,
+                                         quant_step);
     if (status != DIC_STATUS_OK) return status;
     status = codec_subband_lowest_ll_rect(width, height, levels, &ll_rect);
     if (status != DIC_STATUS_OK) return status;
@@ -159,24 +159,23 @@ dic_status codec_basic_encode_image(const uint8_t* input, int width, int height,
     }
 
     if (channels == 3)
-        status = codec_rct_forward(planes[0], planes[1], planes[2],
-                                   plane_count);
+        status =
+            codec_rct_forward(planes[0], planes[1], planes[2], plane_count);
 
     for (channel = 0; status == DIC_STATUS_OK && channel < channels;
          ++channel) {
-        codec_basic_channel_stream* stream =
-            encoded->channel_streams + channel;
+        codec_basic_channel_stream* stream = encoded->channel_streams + channel;
         status =
             dic_dwt53_forward_plane(planes[channel], width, height, levels);
         if (status == DIC_STATUS_OK)
-            status =
-                codec_quant_scalar_i32(planes[channel], plane_count, quant_step);
+            status = codec_quant_scalar_i32(planes[channel], plane_count,
+                                            quant_step);
         if (status == DIC_STATUS_OK)
             status = codec_predict_ll_left(planes[channel], width, ll_rect);
         if (status == DIC_STATUS_OK)
-            status = codec_scan_encode_plane(
-                planes[channel], width, height, levels, &stream->bitplanes,
-                &stream->num_bitplanes);
+            status = codec_scan_encode_plane(planes[channel], width, height,
+                                             levels, &stream->bitplanes,
+                                             &stream->num_bitplanes);
     }
 
 cleanup:
@@ -192,8 +191,7 @@ cleanup:
  * independently clamped per channel before coefficient reconstruction.
  */
 dic_status codec_basic_decode_image(const codec_basic_encoded_image* encoded,
-                                    int num_bitplanes,
-                                    dic_image_u8* decoded) {
+                                    int num_bitplanes, dic_image_u8* decoded) {
     int32_t* planes[3] = {NULL, NULL, NULL};
     size_t plane_count;
     dic_rect_i32 ll_rect;
@@ -237,27 +235,47 @@ dic_status codec_basic_decode_image(const codec_basic_encoded_image* encoded,
             status = codec_unpredict_ll_left(planes[channel], encoded->width,
                                              ll_rect);
         if (status == DIC_STATUS_OK)
-            status = codec_dequant_scalar_i32(
-                planes[channel], plane_count, encoded->quant_step);
+            status = codec_dequant_scalar_i32(planes[channel], plane_count,
+                                              encoded->quant_step);
         if (status == DIC_STATUS_OK)
-            status = dic_dwt53_inverse_plane(
-                planes[channel], encoded->width, encoded->height,
-                encoded->levels);
+            status = dic_dwt53_inverse_plane(planes[channel], encoded->width,
+                                             encoded->height, encoded->levels);
         if (status != DIC_STATUS_OK) goto cleanup;
     }
 
     if (encoded->channels == 3)
-        status = codec_rct_inverse(planes[0], planes[1], planes[2],
-                                   plane_count);
-    for (channel = 0; status == DIC_STATUS_OK &&
-                      channel < encoded->channels;
+        status =
+            codec_rct_inverse(planes[0], planes[1], planes[2], plane_count);
+    for (channel = 0; status == DIC_STATUS_OK && channel < encoded->channels;
          ++channel)
-        codec_basic_copy_plane_to_channel(
-            planes[channel], encoded->width, encoded->height,
-            encoded->channels, channel, decoded->data);
+        codec_basic_copy_plane_to_channel(planes[channel], encoded->width,
+                                          encoded->height, encoded->channels,
+                                          channel, decoded->data);
 
 cleanup:
     for (channel = 0; channel < 3; ++channel) free(planes[channel]);
     if (status != DIC_STATUS_OK) dic_image_u8_free(decoded);
     return status;
+}
+
+void codec_basic_huffman_symbol_counts(const codec_basic_encoded_image* encoded,
+                                       size_t counts[DIC_SCAN_TOKEN_COUNT]) {
+    int channel;
+    int symbol;
+
+    if (counts == NULL) return;
+    for (symbol = 0; symbol < DIC_SCAN_TOKEN_COUNT; ++symbol)
+        counts[symbol] = 0u;
+    if (encoded == NULL || encoded->channel_streams == NULL) return;
+
+    for (channel = 0; channel < encoded->channels; ++channel) {
+        const codec_basic_channel_stream* stream =
+            encoded->channel_streams + channel;
+        int bp;
+        for (bp = 0; bp < stream->num_bitplanes; ++bp) {
+            const codec_scan_bitplane* bitplane = stream->bitplanes + bp;
+            for (symbol = 0; symbol < DIC_SCAN_TOKEN_COUNT; ++symbol)
+                counts[symbol] += bitplane->dominant_symbol_counts[symbol];
+        }
+    }
 }

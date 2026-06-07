@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "bits/bits.h"
 #include "codec/basic_codec.h"
 #include "codec/basic_file.h"
 #include "codec/metrics.h"
@@ -70,7 +71,69 @@ int main(void) {
     free(buffer);
     buffer = NULL;
 
-    /* --- Test 2: Direct stream output is byte-identical --- */
+    /* --- Test 2: RGB payload is serialized layer-major --- */
+    {
+        uint8_t rgb_source[16 * 16 * 3];
+        codec_basic_encoded_image rgb_encoded = {0};
+        uint8_t* rgb_buffer = NULL;
+        size_t rgb_size = 0u;
+        size_t offset;
+        int declared_maximum;
+        int maximum = 0;
+        int pixel, channel, layer;
+
+        for (pixel = 0; pixel < 16 * 16; ++pixel) {
+            rgb_source[(size_t)pixel * 3u] = (uint8_t)(pixel % 251);
+            rgb_source[(size_t)pixel * 3u + 1u] =
+                (uint8_t)((pixel * 3 + 17) % 251);
+            rgb_source[(size_t)pixel * 3u + 2u] =
+                (uint8_t)((pixel * 7 + 29) % 251);
+        }
+        DIC_EXPECT(codec_basic_encode_image(rgb_source, 16, 16, 3, 2, 3.25f,
+                                            &rgb_encoded) ==
+                   DIC_STATUS_OK);
+        DIC_EXPECT(codec_basic_serialize(&rgb_encoded, &rgb_buffer,
+                                         &rgb_size) == DIC_STATUS_OK);
+        DIC_EXPECT(memcmp(rgb_buffer, DIC_BASIC_FILE_MAGIC, 4u) == 0);
+        DIC_EXPECT(bits_u32_from_le(rgb_buffer + 4u) ==
+                   DIC_BASIC_FILE_VERSION);
+        DIC_EXPECT(bits_float_from_bits(bits_u32_from_le(rgb_buffer + 24u)) ==
+                   3.25f);
+
+        offset = 4u + 6u * 4u + DIC_SCAN_TOKEN_COUNT;
+        declared_maximum = (int)bits_u32_from_le(rgb_buffer + offset);
+        offset += 4u;
+        for (channel = 0; channel < rgb_encoded.channels; ++channel) {
+            DIC_EXPECT(bits_u32_from_le(rgb_buffer + offset) ==
+                       (uint32_t)rgb_encoded
+                           .channel_streams[channel]
+                           .num_bitplanes);
+            if (rgb_encoded.channel_streams[channel].num_bitplanes > maximum)
+                maximum =
+                    rgb_encoded.channel_streams[channel].num_bitplanes;
+            offset += 4u;
+        }
+        DIC_EXPECT(declared_maximum == maximum);
+        for (layer = 0; layer < maximum; ++layer) {
+            for (channel = 0; channel < rgb_encoded.channels; ++channel) {
+                const codec_basic_channel_stream* stream =
+                    rgb_encoded.channel_streams + channel;
+                if (layer >= stream->num_bitplanes) continue;
+                offset += codec_basic_bitplane_byte_size(
+                    stream->bitplanes + layer);
+                DIC_EXPECT(offset <= rgb_size);
+            }
+            DIC_EXPECT(bits_u32_from_le(rgb_buffer + offset) ==
+                       DIC_BASIC_LAYER_END_MARKER);
+            offset += 4u;
+        }
+        DIC_EXPECT(offset == rgb_size);
+
+        free(rgb_buffer);
+        codec_basic_encoded_free(&rgb_encoded);
+    }
+
+    /* --- Test 3: Direct stream output is byte-identical --- */
     {
         FILE* stream = open_test_stream();
         uint8_t* stream_bytes = NULL;
@@ -115,7 +178,7 @@ int main(void) {
         fclose(stream);
     }
 
-    /* --- Test 3: Byte-identical to file output --- */
+    /* --- Test 4: Byte-identical to file output --- */
     {
         uint8_t* file_bytes = NULL;
         size_t file_size = 0u;
@@ -155,7 +218,7 @@ int main(void) {
         remove("__test_serialize.dicw");
     }
 
-    /* --- Test 4: Error handling --- */
+    /* --- Test 5: Error handling --- */
     {
         codec_basic_encoded_image dec = {0};
 

@@ -15,19 +15,21 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "codec/basic_codec.h"
 #include "codec/basic_file.h"
 #include "codec/metrics.h"
 #include "fs/fs.h"
 #include "image_u8/image_u8.h"
+#include "ppm/ppm.h"
+
 #if WITH_J2K
 #include "j2k/j2k_codestream.h"
 #include "j2k/j2k_image.h"
 #include "j2k/j2k_parse.h"
 #include "j2k/jp2_file.h"
 #endif /* WITH_J2K */
-#include "ppm/ppm.h"
 
 /**
  * @brief Returns a file length without consuming file contents.
@@ -101,13 +103,70 @@ double imageEncoder(const char* orgImageFileName, float quantizationStepSize,
     return bitrate;
 }
 
+int imageCodecReport(const char* orgImageFileName, float quantizationStepSize,
+                     const char* outputFileName,
+                     finalproj_codec_report* report) {
+    dic_image_u8 original = {0};
+    dic_image_u8 decoded = {0};
+    codec_basic_encoded_image encoded = {0};
+    dic_status status;
+    long bitstream_size;
+    size_t sample_count;
+    size_t symbol_total = 0u;
+    int ok = 0;
+    int symbol;
+
+    if (orgImageFileName == NULL || outputFileName == NULL || report == NULL ||
+        !isfinite(quantizationStepSize) || quantizationStepSize <= 0.0f)
+        return 0;
+    memset(report, 0, sizeof(*report));
+
+    status = dic_ppm_read(orgImageFileName, &original);
+    if (status != DIC_STATUS_OK) goto cleanup;
+    status = codec_basic_encode_image(
+        original.data, original.width, original.height, original.channels,
+        FINALPROJ_LEVELS, quantizationStepSize, &encoded);
+    if (status != DIC_STATUS_OK) goto cleanup;
+
+    codec_basic_huffman_symbol_counts(&encoded, report->huffman_symbol_counts);
+    for (symbol = 0; symbol < DIC_SCAN_TOKEN_COUNT; ++symbol)
+        symbol_total += report->huffman_symbol_counts[symbol];
+
+    status = codec_basic_write_file(outputFileName, &encoded);
+    if (status != DIC_STATUS_OK) goto cleanup;
+    bitstream_size = _file_size_bytes(outputFileName);
+    if (bitstream_size < 0) goto cleanup;
+
+    sample_count = dic_image_u8_sample_count(original.width, original.height,
+                                             original.channels);
+    report->bitrate = codec_metric_bitrate((size_t)bitstream_size * 8u,
+                                           original.width, original.height);
+    report->compression_ratio =
+        sample_count == 0u ? 0.0
+                           : (double)bitstream_size / (double)sample_count;
+    for (symbol = 0; symbol < DIC_SCAN_TOKEN_COUNT; ++symbol)
+        report->huffman_probabilities[symbol] =
+            symbol_total == 0u ? 0.0
+                               : (double)report->huffman_symbol_counts[symbol] /
+                                     (double)symbol_total;
+
+    status = codec_basic_decode_image(&encoded, 0, &decoded);
+    if (status != DIC_STATUS_OK) goto cleanup;
+    report->psnr =
+        codec_metric_psnr_u8(original.data, decoded.data, sample_count);
+    ok = 1;
+
+cleanup:
+    dic_image_u8_free(&decoded);
+    codec_basic_encoded_free(&encoded);
+    dic_image_u8_free(&original);
+    return ok;
+}
+
 /**
  * @brief Executes full DICW decode, reference comparison, and image output.
- *
- * The quantization argument is checked against the binary32 value stored in
- * the file header before any reconstruction is attempted.
  */
-double imageDecoder(const char* bitstreamFileName, float quantizationStepSize,
+double imageDecoder(const char* bitstreamFileName,
                     const char* orgImageFileName) {
     codec_basic_encoded_image encoded = {0};
     dic_image_u8 original = {0};
@@ -117,8 +176,7 @@ double imageDecoder(const char* bitstreamFileName, float quantizationStepSize,
     double psnr = -1.0;
     size_t sample_count;
 
-    if (bitstreamFileName == NULL || orgImageFileName == NULL ||
-        !isfinite(quantizationStepSize) || quantizationStepSize <= 0.0f) {
+    if (bitstreamFileName == NULL || orgImageFileName == NULL) {
         fprintf(stderr, "error: invalid arguments to imageDecoder\n");
         return -1.0;
     }
@@ -130,15 +188,6 @@ double imageDecoder(const char* bitstreamFileName, float quantizationStepSize,
         return -1.0;
     }
 
-    if (encoded.quant_step != quantizationStepSize) {
-        fprintf(stderr,
-                "error: quant_step mismatch: bitstream was encoded with "
-                "quant=%.9g but --quant %.9g was specified\n",
-                encoded.quant_step, quantizationStepSize);
-        codec_basic_encoded_free(&encoded);
-        return -1.0;
-    }
-
     status = codec_basic_decode_image(&encoded, 0, &decoded);
     if (status != DIC_STATUS_OK) {
         fprintf(stderr, "error: decode failed: %s\n",
@@ -147,7 +196,6 @@ double imageDecoder(const char* bitstreamFileName, float quantizationStepSize,
         return -1.0;
     }
 
-    printf("Loading original image %s\n", orgImageFileName);
     status = dic_ppm_read(orgImageFileName, &original);
     if (status == DIC_STATUS_OK && original.width == decoded.width &&
         original.height == decoded.height &&
@@ -179,6 +227,7 @@ double imageDecoder(const char* bitstreamFileName, float quantizationStepSize,
     codec_basic_encoded_free(&encoded);
     return psnr;
 }
+
 #if WITH_J2K
 /** @brief Loads a PGM/PPM image and writes a raw JPEG 2000 codestream. */
 int imageWriteJ2K(const char* orgImageFileName, const char* outputFileName,
@@ -416,8 +465,7 @@ int imageReadBitInfo(const char* bitstreamFileName) {
             runs += current->run_length_byte_count;
             refinement += current->subordinate_byte_count;
         }
-        printf("channel_%d_bitplanes        %d\n", ch,
-               stream->num_bitplanes);
+        printf("channel_%d_bitplanes        %d\n", ch, stream->num_bitplanes);
         printf("channel_%d_dominant_bytes   %zu\n", ch, dominant);
         printf("channel_%d_run_bytes        %zu\n", ch, runs);
         printf("channel_%d_refinement_bytes %zu\n", ch, refinement);

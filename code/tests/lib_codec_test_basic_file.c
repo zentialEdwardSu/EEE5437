@@ -5,7 +5,7 @@
 #include "codec/basic_file.h"
 #include "test_helpers.h"
 
-#define TEST_FILE "test_basic_v7.dicw"
+#define TEST_FILE "test_basic_v8.dicw"
 
 int main(void) {
     uint8_t source[32 * 32];
