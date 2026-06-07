@@ -1,22 +1,22 @@
 #pragma once
 /**
  * @file finalproj_net.h
- * @brief File-backed, quality-progressive DICQ transport over TCP.
+ * @brief File-backed, quality-progressive DICW transport over TCP.
  *
- * The sender fully encodes and stages a DICQ stream before opening the TCP
+ * The sender fully encodes and stages a DICW stream before opening the TCP
  * connection. The receiver appends incoming chunks to a temporary file and
  * decodes a quality layer as soon as its layer marker is available.
  *
  * @code{.unparsed}
  * TCP byte stream
  * +--------------------------+--------------------------------------+
- * | payload_size             | DICQ payload                         |
+ * | payload_size             | DICW payload                         |
  * | u32 little-endian        | payload_size bytes                   |
  * +--------------------------+--------------------------------------+
  *
- * DICQ payload
+ * DICW payload
  * +-------------------------------+-------------------------------+
- * | magic "DICQ"                  | 4 bytes                       |
+ * | magic "DICW"                  | 4 bytes                       |
  * | version                       | u32 LE                        |
  * | width, height                 | 2 x u32 LE                    |
  * | channels, DWT levels          | 2 x u32 LE                    |
@@ -32,9 +32,8 @@
  * | ...                           |                               |
  * +-------------------------------+-------------------------------+
  *
- * Each bit-plane block uses the field layout documented in
- * codec/basic_file.h. DICQ changes DICW channel-major ordering to layer-major
- * ordering so progressive reconstruction can begin early.
+ * The payload is exactly the layer-major DICW format documented in
+ * codec/basic_file.h, so files and network transfers share one protocol.
  * @endcode
  */
 
@@ -45,10 +44,10 @@ extern "C" {
 #endif
 
 /**
- * @brief Encodes, stages, and sends an image as a layer-major DICQ stream.
+ * @brief Encodes, stages, and sends an image as a layer-major DICW stream.
  *
  * @code{.unparsed}
- * input PGM/PPM -> encode -> temporary DICQ file
+ * input PGM/PPM -> encode -> temporary DICW file
  *                              |
  *                              `-> buffered file reads -> TCP
  * @endcode
@@ -64,7 +63,7 @@ int networkSend(const char* inputFile, const char* host, int port, float quant,
                 uint32_t rateLimit);
 
 /**
- * @brief Receives DICQ chunks and publishes each complete quality layer.
+ * @brief Receives DICW chunks and publishes each complete quality layer.
  *
  * Every chunk is appended to a temporary file before parsing. The parser
  * resumes at its previous byte offset and consumes only complete bit-plane
@@ -73,11 +72,10 @@ int networkSend(const char* inputFile, const char* host, int port, float quant,
  *
  * @param port Local TCP listen port.
  * @param outputFile Reconstruction path, replaced after every complete layer.
- * @param quant Expected quantization step; the stream value is authoritative.
  * @param originalFile Optional reference image for per-layer PSNR, or NULL.
  * @return Nonzero after the exact payload is parsed, zero on failure.
  */
-int networkReceive(int port, const char* outputFile, float quant,
+int networkReceive(int port, const char* outputFile,
                    const char* originalFile);
 
 #ifdef __cplusplus

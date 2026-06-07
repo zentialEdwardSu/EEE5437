@@ -1,6 +1,6 @@
 /**
  * @file basic_file.c
- * @brief DICW v7 full-plane stream serialization.
+ * @brief DICW v8 layer-major stream serialization.
  *
  * The implementation deliberately keeps byte-order conversion in the bits
  * module. All helpers here operate on complete logical DICW sections.
@@ -214,6 +214,7 @@ fail:
  */
 static dic_status validate_encoded(
     const codec_basic_encoded_image* encoded) {
+    int channel;
     if (encoded == NULL || encoded->channel_streams == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
     if (encoded->width <= 0 || encoded->height <= 0)
@@ -224,28 +225,48 @@ static dic_status validate_encoded(
         encoded->levels > (int)DIC_BASIC_MAX_LEVELS ||
         !isfinite(encoded->quant_step) || encoded->quant_step <= 0.0f)
         return DIC_STATUS_INVALID_ARGUMENT;
+    for (channel = 0; channel < encoded->channels; ++channel) {
+        const codec_basic_channel_stream* stream =
+            encoded->channel_streams + channel;
+        if (stream->num_bitplanes < 0 ||
+            stream->num_bitplanes > (int)DIC_BASIC_MAX_BITPLANES ||
+            (stream->num_bitplanes > 0 && stream->bitplanes == NULL))
+            return DIC_STATUS_INVALID_ARGUMENT;
+    }
     return DIC_STATUS_OK;
 }
 
+/** @brief Finds the number of layer iterations required by all channels. */
+static int maximum_bitplanes(const codec_basic_encoded_image* encoded) {
+    int maximum = 0;
+    int channel;
+    for (channel = 0; channel < encoded->channels; ++channel) {
+        int count = encoded->channel_streams[channel].num_bitplanes;
+        if (count > maximum) maximum = count;
+    }
+    return maximum;
+}
+
 /**
- * @brief Writes a DICW header followed by channel-major bit-plane blocks.
+ * @brief Writes a DICW header followed by layer-major bit-plane blocks.
  *
  * @code{.unparsed}
  * current cursor
  *   |
  *   +-> DICW fixed header
- *   +-> channel 0 count, bp 0, bp 1, ...
- *   +-> channel 1 count, bp 0, bp 1, ...
- *   `-> channel N count, bp 0, bp 1, ...
+ *   +-> maximum layer count and all channel counts
+ *   +-> layer 0: ch0 bp0, ch1 bp0, ... , 0xfffffffe
+ *   `-> layer 1: ch0 bp1, ch1 bp1, ... , 0xfffffffe
  * @endcode
  */
 dic_status codec_basic_write_stream(FILE* file,
                                     const codec_basic_encoded_image* encoded) {
     unsigned char lengths[DIC_SCAN_TOKEN_COUNT];
     dic_status status = validate_encoded(encoded);
-    int channel, bp;
+    int maximum, channel, layer;
     if (file == NULL || status != DIC_STATUS_OK)
         return file == NULL ? DIC_STATUS_INVALID_ARGUMENT : status;
+    maximum = maximum_bitplanes(encoded);
     codec_scan_get_code_lengths(lengths);
     if (fwrite(DIC_BASIC_FILE_MAGIC, 1u, 4u, file) != 4u ||
         !bits_write_u32(file, DIC_BASIC_FILE_VERSION) ||
@@ -255,20 +276,26 @@ dic_status codec_basic_write_stream(FILE* file,
         !bits_write_u32(file, (uint32_t)encoded->levels) ||
         !bits_write_u32(file, bits_float_bits(encoded->quant_step)) ||
         fwrite(lengths, 1u, DIC_SCAN_TOKEN_COUNT, file) !=
-            DIC_SCAN_TOKEN_COUNT)
+            DIC_SCAN_TOKEN_COUNT ||
+        !bits_write_u32(file, (uint32_t)maximum))
         return DIC_STATUS_IO_ERROR;
 
     for (channel = 0; channel < encoded->channels; ++channel) {
         const codec_basic_channel_stream* stream =
             encoded->channel_streams + channel;
-        if (stream->num_bitplanes < 0 ||
-            stream->num_bitplanes > (int)DIC_BASIC_MAX_BITPLANES ||
-            !bits_write_u32(file, (uint32_t)stream->num_bitplanes))
-            return DIC_STATUS_INVALID_ARGUMENT;
-        for (bp = 0; bp < stream->num_bitplanes; ++bp) {
-            status = write_bitplane(file, stream->bitplanes + bp);
+        if (!bits_write_u32(file, (uint32_t)stream->num_bitplanes))
+            return DIC_STATUS_IO_ERROR;
+    }
+    for (layer = 0; layer < maximum; ++layer) {
+        for (channel = 0; channel < encoded->channels; ++channel) {
+            const codec_basic_channel_stream* stream =
+                encoded->channel_streams + channel;
+            if (layer >= stream->num_bitplanes) continue;
+            status = write_bitplane(file, stream->bitplanes + layer);
             if (status != DIC_STATUS_OK) return status;
         }
+        if (!bits_write_u32(file, DIC_BASIC_LAYER_END_MARKER))
+            return DIC_STATUS_IO_ERROR;
     }
     return DIC_STATUS_OK;
 }
@@ -283,10 +310,10 @@ dic_status codec_basic_read_stream(FILE* file,
                                    codec_basic_encoded_image* encoded) {
     char magic[4];
     unsigned char lengths[DIC_SCAN_TOKEN_COUNT];
-    uint32_t version, width, height, channels, levels, quant_bits;
+    uint32_t version, width, height, channels, levels, quant_bits, maximum;
     float quant;
     dic_status status;
-    int channel;
+    int channel, layer;
     size_t plane_count;
 
     if (file == NULL || encoded == NULL) return DIC_STATUS_INVALID_ARGUMENT;
@@ -297,13 +324,15 @@ dic_status codec_basic_read_stream(FILE* file,
         !bits_read_u32(file, &height) || !bits_read_u32(file, &channels) ||
         !bits_read_u32(file, &levels) || !bits_read_u32(file, &quant_bits) ||
         fread(lengths, 1u, DIC_SCAN_TOKEN_COUNT, file) !=
-            DIC_SCAN_TOKEN_COUNT)
+            DIC_SCAN_TOKEN_COUNT ||
+        !bits_read_u32(file, &maximum))
         return DIC_HW4_FORMAT_ERROR;
     quant = bits_float_from_bits(quant_bits);
     if (version != DIC_BASIC_FILE_VERSION || width == 0u ||
         width > INT_MAX || height == 0u || height > INT_MAX ||
         (channels != 1u && channels != 3u) || levels == 0u ||
-        levels > DIC_BASIC_MAX_LEVELS || !isfinite(quant) || quant <= 0.0f)
+        levels > DIC_BASIC_MAX_LEVELS || !isfinite(quant) || quant <= 0.0f ||
+        maximum > DIC_BASIC_MAX_BITPLANES)
         return DIC_HW4_FORMAT_ERROR;
 
     codec_scan_set_code_lengths(lengths);
@@ -316,7 +345,6 @@ dic_status codec_basic_read_stream(FILE* file,
         uint32_t count;
         codec_basic_channel_stream* stream =
             encoded->channel_streams + channel;
-        int bp;
         if (!bits_read_u32(file, &count) || count > DIC_BASIC_MAX_BITPLANES) {
             status = DIC_HW4_FORMAT_ERROR;
             goto fail;
@@ -329,9 +357,27 @@ dic_status codec_basic_read_stream(FILE* file,
             status = DIC_STATUS_MEMORY_ERROR;
             goto fail;
         }
-        for (bp = 0; bp < (int)count; ++bp) {
-            status = read_bitplane(file, plane_count, stream->bitplanes + bp);
+    }
+    if ((uint32_t)maximum_bitplanes(encoded) != maximum) {
+        status = DIC_HW4_FORMAT_ERROR;
+        goto fail;
+    }
+    for (layer = 0; layer < (int)maximum; ++layer) {
+        for (channel = 0; channel < encoded->channels; ++channel) {
+            codec_basic_channel_stream* stream =
+                encoded->channel_streams + channel;
+            if (layer >= stream->num_bitplanes) continue;
+            status =
+                read_bitplane(file, plane_count, stream->bitplanes + layer);
             if (status != DIC_STATUS_OK) goto fail;
+        }
+        {
+            uint32_t marker;
+            if (!bits_read_u32(file, &marker) ||
+                marker != DIC_BASIC_LAYER_END_MARKER) {
+                status = DIC_HW4_FORMAT_ERROR;
+                goto fail;
+            }
         }
     }
     return DIC_STATUS_OK;

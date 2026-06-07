@@ -12,3 +12,15 @@ indexed/
 *.ppm
 *.pgm
 docs/
+
+# for latex
+*.aux
+*.lof
+*.log
+*.lot
+*.fls
+*.out
+*.toc
+*.synctex.gz
+*.pdf
+_minted*/

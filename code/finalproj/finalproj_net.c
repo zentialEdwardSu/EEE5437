@@ -1,9 +1,9 @@
 /**
  * @file finalproj_net.c
- * @brief DICQ quality-progressive network transport.
+ * @brief DICW quality-progressive network transport.
  *
- * DICQ reuses the DICW bit-plane block but writes blocks in layer-major order.
- * See finalproj_net.h for the complete payload diagram.
+ * Files and network payloads use the same layer-major DICW representation.
+ * See codec/basic_file.h for the complete payload diagram.
  */
 
 #include "finalproj/finalproj_net.h"
@@ -33,12 +33,6 @@
 #define FINALPROJ_MAX_PAYLOAD_SIZE (256u * 1024u * 1024u)
 /** Number of empty nonblocking receive polls allowed before timeout. */
 #define FINALPROJ_RECEIVE_MAX_ATTEMPTS 10000
-/** Four-byte signature at the start of every DICQ payload. */
-#define FINALPROJ_QUALITY_MAGIC "DICQ"
-/** Current incompatible DICQ payload version. */
-#define FINALPROJ_QUALITY_VERSION 3u
-/** Terminator after all channel bit-planes belonging to one quality layer. */
-#define FINALPROJ_LAYER_END_MARKER 0xFFFFFFFEu
 /** Header bytes before the variable per-channel bit-plane counts. */
 #define FINALPROJ_QUALITY_FIXED_HEADER_SIZE \
     (4u + 6u * 4u + DIC_SCAN_TOKEN_COUNT + 4u)
@@ -56,7 +50,7 @@
  * @endcode
  */
 typedef struct receive_parser {
-    /** Absolute byte offset of the next unparsed DICQ field. */
+    /** Absolute byte offset of the next unparsed DICW field. */
     size_t position;
     /** Nonzero after metadata and per-channel counts have been allocated. */
     int header_parsed;
@@ -66,7 +60,7 @@ typedef struct receive_parser {
     int layer;
     /** Next channel expected within the current layer. */
     int channel;
-    /** Maximum layer count declared by the DICQ header. */
+    /** Maximum layer count declared by the DICW header. */
     int max_bitplanes;
 } receive_parser;
 
@@ -115,96 +109,6 @@ static int encoded_max_bitplanes(const codec_basic_encoded_image* encoded) {
         if (count > maximum) maximum = count;
     }
     return maximum;
-}
-
-/**
- * @brief Writes the DICW-compatible bit-plane block used inside DICQ layers.
- *
- * The block begins at the current cursor and ends after the 0xffffffff
- * bit-plane marker. Its detailed field diagram is in codec/basic_file.h.
- */
-static dic_status write_bitplane(FILE* file,
-                                 const codec_scan_bitplane* bp) {
-    if (bp->dominant_token_count > UINT32_MAX ||
-        bp->dominant_command_count > UINT32_MAX ||
-        bp->dominant_stream.bit_count > UINT32_MAX ||
-        bp->dominant_stream.byte_count > UINT32_MAX ||
-        bp->run_length_bit_count > UINT32_MAX ||
-        bp->run_length_byte_count > UINT32_MAX ||
-        bp->subordinate_symbol_count > UINT32_MAX ||
-        bp->subordinate_bit_count > UINT32_MAX ||
-        bp->subordinate_byte_count > UINT32_MAX)
-        return DIC_STATUS_INVALID_ARGUMENT;
-    if (!bits_write_u32(file, (uint32_t)bp->dominant_token_count) ||
-        !bits_write_u32(file, (uint32_t)bp->dominant_command_count) ||
-        !bits_write_u32(file, (uint32_t)bp->dominant_stream.bit_count) ||
-        !bits_write_u32(file, (uint32_t)bp->dominant_stream.byte_count) ||
-        (bp->dominant_stream.byte_count > 0u &&
-         fwrite(bp->dominant_stream.bytes, 1u,
-                bp->dominant_stream.byte_count,
-                file) != bp->dominant_stream.byte_count) ||
-        !bits_write_u32(file, (uint32_t)bp->run_length_bit_count) ||
-        !bits_write_u32(file, (uint32_t)bp->run_length_byte_count) ||
-        (bp->run_length_byte_count > 0u &&
-         fwrite(bp->run_length_bits, 1u, bp->run_length_byte_count, file) !=
-             bp->run_length_byte_count) ||
-        !bits_write_u32(file, (uint32_t)bp->subordinate_symbol_count) ||
-        !bits_write_u32(file, (uint32_t)bp->subordinate_mode) ||
-        !bits_write_u32(file, (uint32_t)bp->subordinate_bit_count) ||
-        !bits_write_u32(file, (uint32_t)bp->subordinate_byte_count) ||
-        (bp->subordinate_byte_count > 0u &&
-         fwrite(bp->subordinate_bits, 1u, bp->subordinate_byte_count, file) !=
-             bp->subordinate_byte_count) ||
-        !bits_write_u32(file, DIC_BP_END_MARKER))
-        return DIC_STATUS_IO_ERROR;
-    return DIC_STATUS_OK;
-}
-
-/**
- * @brief Writes a complete layer-major DICQ payload to a staging file.
- *
- * @code{.unparsed}
- * header
- * layer 0: ch0 bp0, ch1 bp0, ... , 0xfffffffe
- * layer 1: ch0 bp1, ch1 bp1, ... , 0xfffffffe
- * ...
- * @endcode
- */
-static dic_status write_quality_stream(
-    FILE* file, const codec_basic_encoded_image* encoded) {
-    unsigned char lengths[DIC_SCAN_TOKEN_COUNT];
-    int max_bitplanes = encoded_max_bitplanes(encoded);
-    int channel, layer;
-    codec_scan_get_code_lengths(lengths);
-    if (fwrite(FINALPROJ_QUALITY_MAGIC, 1u, 4u, file) != 4u ||
-        !bits_write_u32(file, FINALPROJ_QUALITY_VERSION) ||
-        !bits_write_u32(file, (uint32_t)encoded->width) ||
-        !bits_write_u32(file, (uint32_t)encoded->height) ||
-        !bits_write_u32(file, (uint32_t)encoded->channels) ||
-        !bits_write_u32(file, (uint32_t)encoded->levels) ||
-        !bits_write_u32(file, bits_float_bits(encoded->quant_step)) ||
-        fwrite(lengths, 1u, DIC_SCAN_TOKEN_COUNT, file) !=
-            DIC_SCAN_TOKEN_COUNT ||
-        !bits_write_u32(file, (uint32_t)max_bitplanes))
-        return DIC_STATUS_IO_ERROR;
-    for (channel = 0; channel < encoded->channels; ++channel)
-        if (!bits_write_u32(
-                file,
-                (uint32_t)encoded->channel_streams[channel].num_bitplanes))
-            return DIC_STATUS_IO_ERROR;
-    for (layer = 0; layer < max_bitplanes; ++layer) {
-        for (channel = 0; channel < encoded->channels; ++channel) {
-            const codec_basic_channel_stream* stream =
-                encoded->channel_streams + channel;
-            dic_status status;
-            if (layer >= stream->num_bitplanes) continue;
-            status = write_bitplane(file, stream->bitplanes + layer);
-            if (status != DIC_STATUS_OK) return status;
-        }
-        if (!bits_write_u32(file, FINALPROJ_LAYER_END_MARKER))
-            return DIC_STATUS_IO_ERROR;
-    }
-    return DIC_STATUS_OK;
 }
 
 /**
@@ -327,7 +231,7 @@ read_error:
 }
 
 /**
- * @brief Attempts to parse the fixed DICQ header and channel counts.
+ * @brief Attempts to parse the fixed DICW header and channel counts.
  *
  * The first 28 bytes are read first so the channel count can be validated.
  * The complete header size is:
@@ -337,8 +241,8 @@ read_error:
  * @endcode
  */
 static dic_status try_parse_quality_header(
-    FILE* file, size_t available, float expected_quant,
-    codec_basic_encoded_image* encoded, receive_parser* parser) {
+    FILE* file, size_t available, codec_basic_encoded_image* encoded,
+    receive_parser* parser) {
     unsigned char header[FINALPROJ_QUALITY_FIXED_HEADER_SIZE + 3u * 4u];
     unsigned char lengths[DIC_SCAN_TOKEN_COUNT];
     uint32_t version, width, height, channels, levels, quant_bits, maximum;
@@ -350,7 +254,7 @@ static dic_status try_parse_quality_header(
     if (available < 28u) return DIC_STATUS_OK;
     if (!file_read_at(file, 0u, header, 28u))
         return DIC_STATUS_FILE_READ_ERROR;
-    if (memcmp(header, FINALPROJ_QUALITY_MAGIC, 4u) != 0)
+    if (memcmp(header, DIC_BASIC_FILE_MAGIC, 4u) != 0)
         return DIC_HW4_FORMAT_ERROR;
     version = bits_u32_from_le(header + 4u);
     width = bits_u32_from_le(header + 8u);
@@ -359,7 +263,7 @@ static dic_status try_parse_quality_header(
     levels = bits_u32_from_le(header + 20u);
     quant_bits = bits_u32_from_le(header + 24u);
     quant = bits_float_from_bits(quant_bits);
-    if (version != FINALPROJ_QUALITY_VERSION || width == 0u ||
+    if (version != DIC_BASIC_FILE_VERSION || width == 0u ||
         width > INT_MAX || height == 0u || height > INT_MAX ||
         (channels != 1u && channels != 3u) || levels == 0u ||
         levels > DIC_BASIC_MAX_LEVELS || !isfinite(quant) || quant <= 0.0f)
@@ -398,11 +302,10 @@ static dic_status try_parse_quality_header(
             }
         }
     }
-    if (quant != expected_quant)
-        fprintf(stderr,
-                "[receive] warning: stream quant_step=%.9g, requested %.9g; "
-                "using stream value\n",
-                quant, expected_quant);
+    if ((uint32_t)encoded_max_bitplanes(encoded) != maximum) {
+        codec_basic_encoded_free(encoded);
+        return DIC_HW4_FORMAT_ERROR;
+    }
     parser->position = header_size;
     parser->header_parsed = 1;
     parser->max_bitplanes = (int)maximum;
@@ -421,15 +324,14 @@ static dic_status try_parse_quality_header(
  * 0xfffffffe marker permits @p layer_completed to become nonzero.
  */
 static dic_status parse_next_quality_layer(
-    FILE* file, size_t available, float expected_quant,
-    codec_basic_encoded_image* encoded, receive_parser* parser,
-    int* layer_completed) {
+    FILE* file, size_t available, codec_basic_encoded_image* encoded,
+    receive_parser* parser, int* layer_completed) {
     dic_status status;
 
     *layer_completed = 0;
     if (!parser->header_parsed) {
-        status = try_parse_quality_header(file, available, expected_quant,
-                                          encoded, parser);
+        status =
+            try_parse_quality_header(file, available, encoded, parser);
         if (status != DIC_STATUS_OK || !parser->header_parsed) return status;
     }
     if (parser->finished) return DIC_STATUS_OK;
@@ -453,7 +355,7 @@ static dic_status parse_next_quality_layer(
         uint32_t marker;
         if (!file_read_u32_at(file, parser->position, &marker))
             return DIC_STATUS_FILE_READ_ERROR;
-        if (marker != FINALPROJ_LAYER_END_MARKER)
+        if (marker != DIC_BASIC_LAYER_END_MARKER)
             return DIC_HW4_FORMAT_ERROR;
     }
     parser->position += 4u;
@@ -597,14 +499,14 @@ int networkSend(const char* inputFile, const char* host, int port, float quant,
     quality_layers = encoded_max_bitplanes(&encoded);
     printf("[send] Encoding complete: %d quality layer(s)\n",
            quality_layers);
-    printf("[send] Writing encoded DICQ stream to a temporary file...\n");
+    printf("[send] Writing encoded DICW stream to a temporary file...\n");
     fflush(stdout);
     stream = fs_open_temp_file();
     if (stream == NULL) {
         fprintf(stderr, "[send] failed to create staging file\n");
         goto cleanup;
     }
-    status = write_quality_stream(stream, &encoded);
+    status = codec_basic_write_stream(stream, &encoded);
     if (status != DIC_STATUS_OK || fflush(stream) != 0 ||
         fseek(stream, 0L, SEEK_END) != 0) {
         fprintf(stderr, "[send] failed to persist encoded stream: %s\n",
@@ -705,7 +607,7 @@ cleanup:
  *    -> marker reached: decode and atomically publish
  * @endcode
  */
-int networkReceive(int port, const char* outputFile, float quant,
+int networkReceive(int port, const char* outputFile,
                    const char* originalFile) {
     net_config config;
     net_control* net = NULL;
@@ -811,8 +713,7 @@ int networkReceive(int port, const char* outputFile, float quant,
         while (1) {
             int layer_completed = 0;
             status = parse_next_quality_layer(
-                stream, received_total, quant, &encoded, &parser,
-                &layer_completed);
+                stream, received_total, &encoded, &parser, &layer_completed);
             if (status != DIC_STATUS_OK) {
                 fprintf(stderr,
                         "[receive] invalid progressive stream near byte %zu: "
@@ -839,8 +740,7 @@ int networkReceive(int port, const char* outputFile, float quant,
     while (!parser.finished) {
         int layer_completed = 0;
         status = parse_next_quality_layer(
-            stream, received_total, quant, &encoded, &parser,
-            &layer_completed);
+            stream, received_total, &encoded, &parser, &layer_completed);
         if (status != DIC_STATUS_OK || !layer_completed) {
             fprintf(stderr,
                     "[receive] payload ended before a complete layer marker\n");
