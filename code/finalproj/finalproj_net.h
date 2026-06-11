@@ -7,34 +7,6 @@
  * connection. The receiver appends incoming chunks to a temporary file and
  * decodes a quality layer as soon as its layer marker is available.
  *
- * @code{.unparsed}
- * TCP byte stream
- * +--------------------------+--------------------------------------+
- * | payload_size             | DICW payload                         |
- * | u32 little-endian        | payload_size bytes                   |
- * +--------------------------+--------------------------------------+
- *
- * DICW payload
- * +-------------------------------+-------------------------------+
- * | magic "DICW"                  | 4 bytes                       |
- * | version                       | u32 LE                        |
- * | width, height                 | 2 x u32 LE                    |
- * | channels, DWT levels          | 2 x u32 LE                    |
- * | quant_step IEEE-754 bits      | u32 LE                        |
- * | Huffman code lengths          | DIC_SCAN_TOKEN_COUNT bytes    |
- * | maximum quality layers        | u32 LE                        |
- * | bitplane count per channel    | channels x u32 LE             |
- * +-------------------------------+-------------------------------+
- * | layer 0: channel bit-planes   | channels owning layer 0       |
- * | layer marker 0xfffffffe       | u32 LE                        |
- * | layer 1: channel bit-planes   | channels owning layer 1       |
- * | layer marker 0xfffffffe       | u32 LE                        |
- * | ...                           |                               |
- * +-------------------------------+-------------------------------+
- *
- * The payload is exactly the layer-major DICW format documented in
- * codec/basic_file.h, so files and network transfers share one protocol.
- * @endcode
  */
 
 #include <stdint.h>

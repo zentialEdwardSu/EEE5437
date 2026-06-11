@@ -19,7 +19,7 @@
  *        `--> codec_basic_encoded_image
  * @endcode
  *
- * This header describes the in-memory representation. DICW v8 file layout is
+ * This header describes the in-memory representation. DICW v10 file layout is
  * documented in basic_file.h.
  */
 
@@ -37,7 +37,7 @@ extern "C" {
  * @brief Progressive bit-plane stream for one transformed image component.
  *
  * Bit-plane element zero is the most significant coded plane. Each element
- * owns its internal dominant, run-length, and refinement byte arrays.
+ * owns its internal dominant and refinement byte arrays.
  */
 typedef struct codec_basic_channel_stream {
     /** Heap array of @ref codec_scan_bitplane objects, or NULL when empty. */

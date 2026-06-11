@@ -41,10 +41,9 @@ void codec_basic_encoded_init(codec_basic_encoded_image* encoded) {
 
 /** @brief Recursively releases channel arrays and their bit-plane payloads. */
 void codec_basic_encoded_free(codec_basic_encoded_image* encoded) {
-    int channel;
     if (encoded == NULL) return;
     if (encoded->channel_streams != NULL) {
-        for (channel = 0; channel < encoded->channels; ++channel) {
+        for (int channel = 0; channel < encoded->channels; ++channel) {
             codec_basic_channel_stream* stream =
                 encoded->channel_streams + channel;
             int bp;
@@ -92,17 +91,6 @@ dic_status codec_basic_encoded_alloc_streams(codec_basic_encoded_image* encoded,
     return DIC_STATUS_OK;
 }
 
-/** @brief Deinterleaves one component into a signed working plane. */
-static void codec_basic_copy_channel_to_plane(const uint8_t* input, int width,
-                                              int height, int channels,
-                                              int channel, int32_t* plane) {
-    size_t count = (size_t)width * (size_t)height;
-    size_t pixel;
-    for (pixel = 0u; pixel < count; ++pixel)
-        plane[pixel] =
-            (int32_t)input[pixel * (size_t)channels + (size_t)channel];
-}
-
 /** @brief Saturates a reconstructed signed sample to the output u8 range. */
 static uint8_t codec_basic_clamp_u8(int32_t value) {
     if (value < 0) return 0u;
@@ -115,55 +103,57 @@ static void codec_basic_copy_plane_to_channel(const int32_t* plane, int width,
                                               int height, int channels,
                                               int channel, uint8_t* output) {
     size_t count = (size_t)width * (size_t)height;
-    size_t pixel;
-    for (pixel = 0u; pixel < count; ++pixel)
+    for (size_t pixel = 0u; pixel < count; ++pixel)
         output[pixel * (size_t)channels + (size_t)channel] =
             codec_basic_clamp_u8(plane[pixel]);
 }
 
 /**
  * @brief Runs the complete forward pipeline and creates channel streams.
- *
- * The scanner receives the full packed DWT plane, not one subband at a time.
- * This is what permits zerotree relationships across resolutions.
  */
 dic_status codec_basic_encode_image(const uint8_t* input, int width, int height,
                                     int channels, int levels, float quant_step,
                                     codec_basic_encoded_image* encoded) {
     int32_t* planes[3] = {NULL, NULL, NULL};
-    size_t plane_count;
     dic_rect_i32 ll_rect;
     dic_status status;
-    int channel;
 
+    // for robustness.
     if (input == NULL || encoded == NULL) return DIC_STATUS_INVALID_ARGUMENT;
     status = codec_basic_validate_params(width, height, channels, levels,
                                          quant_step);
     if (status != DIC_STATUS_OK) return status;
+
+    // precompute the region of LL subband
     status = codec_subband_lowest_ll_rect(width, height, levels, &ll_rect);
     if (status != DIC_STATUS_OK) return status;
     status = codec_basic_encoded_alloc_streams(encoded, width, height, channels,
                                                levels, quant_step);
     if (status != DIC_STATUS_OK) return status;
 
-    plane_count = (size_t)width * (size_t)height;
-    for (channel = 0; channel < channels; ++channel) {
+    // For RGB img, separate pixels to R/G/B planes and optionally apply RGB
+    // RCT; each plane is modified in-place also convert u8 to i32
+    size_t plane_count = (size_t)width * (size_t)height;
+    for (int channel = 0; channel < channels; channel++) {
         planes[channel] =
             (int32_t*)malloc(plane_count * sizeof(planes[channel][0]));
         if (planes[channel] == NULL) {
             status = DIC_STATUS_MEMORY_ERROR;
             goto cleanup;
         }
-        codec_basic_copy_channel_to_plane(input, width, height, channels,
-                                          channel, planes[channel]);
-    }
 
-    if (channels == 3)
+        for (size_t pixel = 0u; pixel < plane_count; pixel++)
+            planes[channel][pixel] =
+                (int32_t)input[pixel * (size_t)channels + (size_t)channel];
+    }
+    // TODO: consider improve stauts check and release strategy.
+    if (channels == 3) // for rgb
         status =
             codec_rct_forward(planes[0], planes[1], planes[2], plane_count);
+    if (status != DIC_STATUS_OK) goto cleanup;
 
-    for (channel = 0; status == DIC_STATUS_OK && channel < channels;
-         ++channel) {
+    for (int channel = 0; channel < channels; channel++) {
+        // tweak chan in codec_basic_encoded_image
         codec_basic_channel_stream* stream = encoded->channel_streams + channel;
         status =
             dic_dwt53_forward_plane(planes[channel], width, height, levels);
@@ -179,7 +169,7 @@ dic_status codec_basic_encode_image(const uint8_t* input, int width, int height,
     }
 
 cleanup:
-    for (channel = 0; channel < 3; ++channel) free(planes[channel]);
+    for (int channel = 0; channel < 3; channel++) free(planes[channel]);
     if (status != DIC_STATUS_OK) codec_basic_encoded_free(encoded);
     return status;
 }

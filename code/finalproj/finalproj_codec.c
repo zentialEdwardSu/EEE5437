@@ -420,7 +420,7 @@ int imageReadJP2Info(const char* inputFileName) {
  * @brief Parses DICW and reports fixed metadata plus payload accounting.
  *
  * Per-channel byte totals are derived from the same in-memory fields used by
- * the serializer, so the report separates dominant, run, and refinement data.
+ * the serializer, so the report separates dominant and refinement data.
  */
 int imageReadBitInfo(const char* bitstreamFileName) {
     codec_basic_encoded_image encoded = {0};
@@ -457,17 +457,15 @@ int imageReadBitInfo(const char* bitstreamFileName) {
 
     for (ch = 0; ch < encoded.channels; ++ch) {
         const codec_basic_channel_stream* stream = encoded.channel_streams + ch;
-        size_t dominant = 0u, runs = 0u, refinement = 0u;
+        size_t dominant = 0u, refinement = 0u;
         int bp;
         for (bp = 0; bp < stream->num_bitplanes; ++bp) {
             const codec_scan_bitplane* current = stream->bitplanes + bp;
             dominant += current->dominant_stream.byte_count;
-            runs += current->run_length_byte_count;
             refinement += current->subordinate_byte_count;
         }
         printf("channel_%d_bitplanes        %d\n", ch, stream->num_bitplanes);
         printf("channel_%d_dominant_bytes   %zu\n", ch, dominant);
-        printf("channel_%d_run_bytes        %zu\n", ch, runs);
         printf("channel_%d_refinement_bytes %zu\n", ch, refinement);
         printf("channel_%d_total_bytes      %zu\n", ch,
                codec_basic_channel_byte_size(stream));

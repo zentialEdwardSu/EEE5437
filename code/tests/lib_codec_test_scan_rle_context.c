@@ -22,8 +22,7 @@ int main(void) {
                                        &bitplane_count) == DIC_STATUS_OK);
     DIC_EXPECT(bitplane_count == 5);
     for (i = 0; i < bitplane_count; ++i) {
-        DIC_EXPECT(bitplanes[i].dominant_command_count <=
-                   bitplanes[i].dominant_token_count);
+        DIC_EXPECT(bitplanes[i].dominant_token_count > 0u);
         DIC_EXPECT(bitplanes[i].subordinate_mode ==
                        DIC_SCAN_REFINEMENT_RAW ||
                    bitplanes[i].subordinate_mode ==
@@ -40,7 +39,7 @@ int main(void) {
         codec_scan_bitplane_free(bitplanes + i);
     free(bitplanes);
 
-    /* Fine-scale significance creates long IZ sequences at coarse scales. */
+    /* Fine-scale significance may create long IZ sequences; they stay as IZ. */
     memset(plane, 0, sizeof(plane));
     for (i = 0; i < 32 * 32; ++i) {
         int x = i % 32;
@@ -52,15 +51,13 @@ int main(void) {
     DIC_EXPECT(codec_scan_encode_plane(plane, 32, 32, 3, &bitplanes,
                                        &bitplane_count) == DIC_STATUS_OK);
     DIC_EXPECT(bitplane_count == 1);
-    DIC_EXPECT(bitplanes[0].dominant_command_count <
-               bitplanes[0].dominant_token_count);
-    DIC_EXPECT(bitplanes[0].run_length_bit_count > 0u);
+    DIC_EXPECT(bitplanes[0].dominant_token_count > 0u);
     {
-        size_t saved = bitplanes[0].run_length_bit_count;
-        --bitplanes[0].run_length_bit_count;
+        size_t saved = bitplanes[0].dominant_token_count;
+        --bitplanes[0].dominant_token_count;
         DIC_EXPECT(codec_scan_decode_plane(bitplanes, 1, 1, 32, 32, 3,
                                            decoded) != DIC_STATUS_OK);
-        bitplanes[0].run_length_bit_count = saved;
+        bitplanes[0].dominant_token_count = saved;
     }
     codec_scan_bitplane_free(bitplanes);
     free(bitplanes);

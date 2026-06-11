@@ -24,17 +24,17 @@ int main(void) {
     {
         size_t counts[DIC_SCAN_TOKEN_COUNT];
         size_t count_total = 0u;
-        size_t command_total = 0u;
+        size_t token_total = 0u;
         int symbol;
 
         codec_basic_huffman_symbol_counts(&encoded, counts);
         for (symbol = 0; symbol < DIC_SCAN_TOKEN_COUNT; ++symbol)
             count_total += counts[symbol];
         for (bp = 0; bp < encoded.channel_streams[0].num_bitplanes; ++bp)
-            command_total +=
-                encoded.channel_streams[0].bitplanes[bp].dominant_command_count;
+            token_total +=
+                encoded.channel_streams[0].bitplanes[bp].dominant_token_count;
         DIC_EXPECT(count_total > 0u);
-        DIC_EXPECT(count_total == command_total);
+        DIC_EXPECT(count_total == token_total);
     }
 
     for (bp = 1; bp <= encoded.channel_streams[0].num_bitplanes; ++bp) {

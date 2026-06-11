@@ -118,8 +118,7 @@ static int encoded_max_bitplanes(const codec_basic_encoded_image* encoded) {
  * position
  *   |
  *   v
- * [16-byte dominant header][dominant payload]
- * [ 8-byte run header     ][run payload]
+ * [12-byte dominant header][dominant payload]
  * [16-byte refine header  ][refine payload][0xffffffff]
  *                                                ^
  *                                                next_position
@@ -131,36 +130,26 @@ static int encoded_max_bitplanes(const codec_basic_encoded_image* encoded) {
 static dic_status try_read_bitplane(
     FILE* file, size_t available, size_t position, size_t plane_count,
     codec_scan_bitplane* bp, size_t* next_position, int* complete) {
-    uint32_t token_count, command_count, dominant_bits, dominant_bytes;
-    uint32_t run_bits, run_bytes, symbols, mode, refinement_bits;
+    uint32_t token_count, dominant_bits, dominant_bytes;
+    uint32_t symbols, mode, refinement_bits;
     uint32_t refinement_bytes, marker;
-    size_t dominant_start, run_header, run_start, refinement_header;
+    size_t dominant_start, refinement_header;
     size_t refinement_start, marker_position, end;
 
     if (file == NULL || bp == NULL || next_position == NULL ||
         complete == NULL)
         return DIC_STATUS_INVALID_ARGUMENT;
     *complete = 0;
-    if (!add_size_checked(position, 16u, &dominant_start) ||
+    if (!add_size_checked(position, 12u, &dominant_start) ||
         dominant_start > available)
         return DIC_STATUS_OK;
     if (!file_read_u32_at(file, position, &token_count) ||
-        !file_read_u32_at(file, position + 4u, &command_count) ||
-        !file_read_u32_at(file, position + 8u, &dominant_bits) ||
-        !file_read_u32_at(file, position + 12u, &dominant_bytes))
+        !file_read_u32_at(file, position + 4u, &dominant_bits) ||
+        !file_read_u32_at(file, position + 8u, &dominant_bytes))
         return DIC_STATUS_FILE_READ_ERROR;
-    if (token_count > plane_count || command_count > token_count ||
+    if (token_count > plane_count ||
         (uint64_t)dominant_bits > (uint64_t)dominant_bytes * 8u ||
-        !add_size_checked(dominant_start, dominant_bytes, &run_header))
-        return DIC_HW4_FORMAT_ERROR;
-    if (!add_size_checked(run_header, 8u, &run_start) ||
-        run_start > available)
-        return DIC_STATUS_OK;
-    if (!file_read_u32_at(file, run_header, &run_bits) ||
-        !file_read_u32_at(file, run_header + 4u, &run_bytes))
-        return DIC_STATUS_FILE_READ_ERROR;
-    if ((uint64_t)run_bits > (uint64_t)run_bytes * 8u ||
-        !add_size_checked(run_start, run_bytes, &refinement_header))
+        !add_size_checked(dominant_start, dominant_bytes, &refinement_header))
         return DIC_HW4_FORMAT_ERROR;
     if (!add_size_checked(refinement_header, 16u, &refinement_start) ||
         refinement_start > available)
@@ -184,11 +173,8 @@ static dic_status try_read_bitplane(
 
     codec_scan_bitplane_init(bp);
     bp->dominant_token_count = token_count;
-    bp->dominant_command_count = command_count;
     bp->dominant_stream.bit_count = dominant_bits;
     bp->dominant_stream.byte_count = dominant_bytes;
-    bp->run_length_bit_count = run_bits;
-    bp->run_length_byte_count = run_bytes;
     bp->subordinate_symbol_count = symbols;
     bp->subordinate_mode = (codec_scan_refinement_mode)mode;
     bp->subordinate_bit_count = refinement_bits;
@@ -200,13 +186,6 @@ static dic_status try_read_bitplane(
             goto memory_error;
         if (!file_read_at(file, dominant_start, bp->dominant_stream.bytes,
                           dominant_bytes))
-            goto read_error;
-    }
-    if (run_bytes > 0u) {
-        bp->run_length_bits = (unsigned char*)malloc((size_t)run_bytes);
-        if (bp->run_length_bits == NULL)
-            goto memory_error;
-        if (!file_read_at(file, run_start, bp->run_length_bits, run_bytes))
             goto read_error;
     }
     if (refinement_bytes > 0u) {

@@ -5,14 +5,16 @@
  *
  * @code{.unparsed}
  * imageEncoder:
- *   PGM/PPM -> codec_basic_encode_image -> DICW v8 file
+ *   PGM/PPM -> codec_basic_encode_image -> DICW v10 file
  *
  * imageDecoder:
- *   DICW v8 file -> codec_basic_decode_image -> image_recon.pgm/.ppm
+ *   DICW v10 file -> codec_basic_decode_image -> image_recon.pgm/.ppm
  * @endcode
  */
 
 #include <stddef.h>
+
+#include "codec/scan.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,12 +34,12 @@ typedef struct finalproj_codec_report {
     double bitrate;
     double compression_ratio;
     double psnr;
-    size_t huffman_symbol_counts[5];
-    double huffman_probabilities[5];
+    size_t huffman_symbol_counts[DIC_SCAN_TOKEN_COUNT];
+    double huffman_probabilities[DIC_SCAN_TOKEN_COUNT];
 } finalproj_codec_report;
 
 /**
- * @brief Encodes an image and writes a DICW v8 progressive bitstream.
+ * @brief Encodes an image and writes a DICW v10 progressive bitstream.
  * @param orgImageFileName Input PGM or PPM path.
  * @param quantizationStepSize Finite positive scalar quantization step.
  * @param outputFileName Destination DICW path.
@@ -55,14 +57,14 @@ int imageCodecReport(const char* orgImageFileName, float quantizationStepSize,
 
 /**
  * @brief Parses DICW metadata and prints per-channel payload byte totals.
- * @param bitstreamFileName DICW v8 source path.
+ * @param bitstreamFileName DICW v10 source path.
  * @return Nonzero on success, zero on failure.
  */
 int imageReadBitInfo(const char* bitstreamFileName);
 
 /**
  * @brief Decodes all DICW layers and writes the reconstruction.
- * @param bitstreamFileName DICW v8 source path.
+ * @param bitstreamFileName DICW v10 source path.
  * @param orgImageFileName Reference PGM/PPM used to calculate PSNR.
  * @return PSNR in dB, infinity for an exact reconstruction, or -1.0 on
  * failure.

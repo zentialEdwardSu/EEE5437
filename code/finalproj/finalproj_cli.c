@@ -356,14 +356,12 @@ static int finalproj_bit_codec(int argc, char** argv) {
         printf("\"psnr\":null,\"lossless\":true,");
     else
         printf("\"psnr\":%.9g,\"lossless\":false,", report.psnr);
-    printf("\"huffman_counts\":[%zu,%zu,%zu,%zu,%zu],",
+    printf("\"huffman_counts\":[%zu,%zu,%zu,%zu],",
            report.huffman_symbol_counts[0], report.huffman_symbol_counts[1],
-           report.huffman_symbol_counts[2], report.huffman_symbol_counts[3],
-           report.huffman_symbol_counts[4]);
-    printf("\"huffman_probabilities\":[%.12g,%.12g,%.12g,%.12g,%.12g]}\n",
+           report.huffman_symbol_counts[2], report.huffman_symbol_counts[3]);
+    printf("\"huffman_probabilities\":[%.12g,%.12g,%.12g,%.12g]}\n",
            report.huffman_probabilities[0], report.huffman_probabilities[1],
-           report.huffman_probabilities[2], report.huffman_probabilities[3],
-           report.huffman_probabilities[4]);
+           report.huffman_probabilities[2], report.huffman_probabilities[3]);
     return 0;
 }
 

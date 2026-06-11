@@ -4,15 +4,13 @@
  * @brief Full-plane zerotree significance and context refinement coding.
  *
  * Each coefficient plane is encoded from its most significant nonzero bit to
- * bit zero. One @ref codec_scan_bitplane contains three logical payloads:
+ * bit zero. One @ref codec_scan_bitplane contains two logical payloads:
  *
  * @code{.unparsed}
  * coefficient bit-plane
  *        |
  *        +--> dominant significance tokens
- *        |      token stream -> IZ run folding -> fixed Huffman bytes
- *        |                         |
- *        |                         `-> Exp-Golomb run side stream
+ *        |      token stream -> fixed Huffman bytes
  *        |
  *        `--> subordinate refinement bits
  *               -> adaptive arithmetic bytes when smaller
@@ -20,8 +18,7 @@
  *
  * codec_scan_bitplane
  * +------------------------+
- * | dominant_stream        | Huffman-coded commands
- * | run_length_bits        | Exp-Golomb payload for ZRUN commands
+ * | dominant_stream        | Huffman-coded significance tokens
  * | subordinate_bits       | raw or arithmetic refinement payload
  * +------------------------+
  * @endcode
@@ -49,10 +46,8 @@ typedef enum codec_scan_token {
   DIC_SCAN_TOKEN_POS = 2,
   /** Newly significant negative coefficient. */
   DIC_SCAN_TOKEN_NEG = 3,
-  /** Command replacing a profitable run of five or more IZ tokens. */
-  DIC_SCAN_TOKEN_ZRUN = 4,
   /** Number of token symbols in the fixed Huffman alphabet. */
-  DIC_SCAN_TOKEN_COUNT = 5
+  DIC_SCAN_TOKEN_COUNT = 4
 } codec_scan_token;
 
 /** Default probabilities used to construct the fixed Huffman table. */
@@ -73,20 +68,12 @@ typedef enum codec_scan_refinement_mode {
  * codec_scan_bitplane_free().
  */
 typedef struct codec_scan_bitplane {
-  /** Expanded dominant token count before IZ run folding. */
+  /** Dominant significance-token count. */
   size_t dominant_token_count;
-  /** Huffman command count after IZ run folding. */
-  size_t dominant_command_count;
-  /** Per-symbol counts for the commands sent to the Huffman encoder. */
+  /** (For tuning)Per-symbol counts for the tokens sent to the Huffman encoder. */
   size_t dominant_symbol_counts[DIC_SCAN_TOKEN_COUNT];
-  /** Fixed-table Huffman payload for dominant commands. */
+  /** Fixed-table Huffman payload for dominant tokens. */
   dic_hw2_huffman_bitstream dominant_stream;
-  /** Exp-Golomb side payload used by ZRUN commands. */
-  unsigned char* run_length_bits;
-  /** Number of meaningful bits in @ref run_length_bits. */
-  size_t run_length_bit_count;
-  /** Allocated/stored bytes in @ref run_length_bits. */
-  size_t run_length_byte_count;
   /** Raw or arithmetic-coded subordinate refinement payload. */
   unsigned char* subordinate_bits;
   /** Number of coefficients refined by this layer. */

@@ -11,13 +11,13 @@ dic_status codec_predict_ll_left(int32_t *plane, int stride, dic_rect_i32 rect)
 
     for (y = 0; y < rect.height; ++y)
     {
-        int x;
         int32_t previous = 0;
         int32_t *row = plane + ((size_t)(rect.y + y) * (size_t)stride) + (size_t)rect.x;
 
-        for (x = 0; x < rect.width; ++x)
+        for (int x = 0; x < rect.width; ++x)
         {
             int32_t original = row[x];
+            // current - previous e.g. 101-100 = 1,
             row[x] = original - previous;
             previous = original;
         }

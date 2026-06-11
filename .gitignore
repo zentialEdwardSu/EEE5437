@@ -12,6 +12,7 @@ indexed/
 *.ppm
 *.pgm
 docs/
+*.csv
 
 # for latex
 *.aux

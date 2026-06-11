@@ -1,13 +1,13 @@
 #pragma once
 /**
  * @file basic_file.h
- * @brief DICW v8 layer-major serialization for progressive streams.
+ * @brief DICW v10 layer-major serialization for progressive streams.
  *
  * All integers are unsigned 32-bit little-endian values. The quantization
  * field stores the raw IEEE-754 binary32 bit pattern in a u32 slot.
  *
  * @code{.unparsed}
- * DICW v8 file
+ * DICW v10 file
  * +-------------------------------+-------------------------------+
  * | Field                         | Size                          |
  * +-------------------------------+-------------------------------+
@@ -32,13 +32,9 @@
  * bitplane block
  * +--------------------------------------+------------------------+
  * | dominant_token_count                 | u32 LE                 |
- * | dominant_command_count               | u32 LE                 |
  * | dominant_bit_count                   | u32 LE                 |
  * | dominant_byte_count                  | u32 LE                 |
  * | dominant Huffman bytes               | dominant_byte_count    |
- * | run_bit_count                        | u32 LE                 |
- * | run_byte_count                       | u32 LE                 |
- * | Exp-Golomb run bytes                 | run_byte_count         |
  * | refinement_symbol_count              | u32 LE                 |
  * | refinement_mode                      | u32 LE                 |
  * | refinement_bit_count                 | u32 LE                 |
@@ -60,7 +56,7 @@ extern "C" {
 /** Four-byte DICW container signature. */
 #define DIC_BASIC_FILE_MAGIC "DICW"
 /** Current incompatible DICW format version. */
-#define DIC_BASIC_FILE_VERSION 8u
+#define DIC_BASIC_FILE_VERSION 10u
 /** Terminator written after every serialized bit-plane block. */
 #define DIC_BP_END_MARKER 0xFFFFFFFFu
 /** Terminator written after every complete quality layer. */
@@ -81,14 +77,14 @@ size_t codec_basic_bitplane_byte_size(const codec_scan_bitplane* bitplane);
 /**
  * @brief Computes one channel's count field plus all bit-plane blocks.
  * @param stream Channel stream.
- * @return Bytes attributed to the channel, or zero for NULL. In DICW v8 the
+ * @return Bytes attributed to the channel, or zero for NULL. In DICW v10 the
  * count is stored in the header and the bit-plane blocks are layer-major.
  */
 size_t codec_basic_channel_byte_size(
     const codec_basic_channel_stream* stream);
 
 /**
- * @brief Writes a complete DICW v8 file.
+ * @brief Writes a complete DICW v10 file.
  * @param path Destination path, replaced if it exists.
  * @param encoded Valid encoded image.
  * @return DIC_STATUS_OK on success, otherwise an error status.
@@ -97,7 +93,7 @@ dic_status codec_basic_write_file(const char* path,
                                   const codec_basic_encoded_image* encoded);
 
 /**
- * @brief Reads and validates a complete DICW v8 file.
+ * @brief Reads and validates a complete DICW v10 file.
  * @param path Source path.
  * @param encoded Destination owning object; prior contents are released.
  * @return DIC_STATUS_OK on success. Trailing bytes are rejected.
@@ -125,7 +121,7 @@ dic_status codec_basic_read_stream(FILE* file,
                                    codec_basic_encoded_image* encoded);
 
 /**
- * @brief Serializes DICW v8 into a newly allocated byte buffer.
+ * @brief Serializes DICW v10 into a newly allocated byte buffer.
  * @param encoded Valid encoded image.
  * @param out_buffer Receives malloc-owned bytes; free with free().
  * @param out_size Receives the byte count.
@@ -135,7 +131,7 @@ dic_status codec_basic_serialize(const codec_basic_encoded_image* encoded,
                                  uint8_t** out_buffer, size_t* out_size);
 
 /**
- * @brief Deserializes exactly one DICW v8 object from memory.
+ * @brief Deserializes exactly one DICW v10 object from memory.
  * @param buffer Source bytes.
  * @param size Exact source byte count; trailing bytes are rejected.
  * @param encoded Destination owning object.

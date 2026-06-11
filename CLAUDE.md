@@ -112,7 +112,7 @@ build/bin/lib_codec_test_basic.exe
 
 ### Two compression pipelines
 
-**Basic codec** (`code/lib/codec/`): The project's own quality-progressive codec. Pipeline: deinterleave → mandatory RGB RCT → 5/3 DWT → scalar quantize → LL DPCM → full-plane cross-resolution zerotree scan. The dominant pass uses fixed Huffman coding plus Exp-Golomb IZ runs; refinement uses a three-context adaptive binary arithmetic coder with raw fallback. Serialized to incompatible **DICW v8** layer-major streams.
+**Basic codec** (`code/lib/codec/`): The project's own quality-progressive codec. Pipeline: deinterleave → mandatory RGB RCT → 5/3 DWT → scalar quantize → LL DPCM → full-plane cross-resolution zerotree scan. The dominant pass uses fixed Huffman coding over raw significance tokens; refinement uses a three-context adaptive binary arithmetic coder with raw fallback. Serialized to incompatible **DICW v10** layer-major streams.
 
 **JPEG 2000** (`code/lib/j2k/`): From-scratch T.800 implementation. Reversible path: RCT → 5/3 DWT (int). Irreversible path: ICT → 9/7 DWT (float) → scalar quant. EBCOT with MQ arithmetic coder, tag-tree packet headers, LRCP packet construction. Supports tiles, ROI Maxshift, multi-layer.
 
@@ -122,7 +122,7 @@ Each subdirectory becomes a static lib (`lib_<name>`) auto-linked via the `proje
 
 | Module | Purpose |
 |---|---|
-| `codec` | Basic codec: encode/decode, full-plane zerotree scan, DICW v8 file I/O, quantization, metrics, subband layout |
+| `codec` | Basic codec: encode/decode, full-plane zerotree scan, DICW v10 file I/O, quantization, metrics, subband layout |
 | `j2k` | JPEG 2000: codestream, EBCOT, MQ coder, packets, tag-trees, ICT/RCT, ROI, JP2 files, parsing |
 | `wavelet` | 5/3 (integer, reversible) and 9/7 (float, irreversible) DWT |
 | `image_u8` | `dic_image_u8` struct (width, height, channels, uint8 data) — the universal pixel container |
@@ -137,14 +137,14 @@ Each subdirectory becomes a static lib (`lib_<name>`) auto-linked via the `proje
 
 CLI built with `cargs` (third-party). Subcommands: `encode`, `decode`, `codec` (roundtrip), `j2k-write`, `j2k-write-tiled`, `j2k-read`, `j2k-info`, `send`, `receive`.
 
-Network flow: sender reads PPM → encodes → serializes the same layer-major DICW v8 used by files → sends a 4-byte LE size plus payload over TCP. Receiver accepts → receives payload → publishes interleaved channel bitplane layers → writes intermediate PPMs during quality progression → writes the final PPM.
+Network flow: sender reads PPM → encodes → serializes the same layer-major DICW v10 used by files → sends a 4-byte LE size plus payload over TCP. Receiver accepts → receives payload → publishes interleaved channel bitplane layers → writes intermediate PPMs during quality progression → writes the final PPM.
 
 ### Data flow (basic codec)
 
 ```
 PPM file → dic_ppm_read() → dic_image_u8
   → codec_basic_encode_image() → codec_basic_encoded_image
-  → codec_basic_serialize() / codec_basic_write_file() → DICW v8 buffer/file
+  → codec_basic_serialize() / codec_basic_write_file() → DICW v10 buffer/file
   → codec_basic_deserialize() / codec_basic_read_file()
   → codec_basic_decode_image(bitplane_count) → full-resolution dic_image_u8
   → dic_ppm_write() → PPM file

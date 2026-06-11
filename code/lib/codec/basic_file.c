@@ -1,6 +1,6 @@
 /**
  * @file basic_file.c
- * @brief DICW v8 layer-major stream serialization.
+ * @brief DICW v10 layer-major stream serialization.
  *
  * The implementation deliberately keeps byte-order conversion in the bits
  * module. All helpers here operate on complete logical DICW sections.
@@ -22,16 +22,14 @@
  * @brief Returns the exact size of the bit-plane block shown below.
  *
  * @code{.unparsed}
- * fixed metadata: 11 x u32 = 44 bytes
+ * fixed metadata: 8 x u32 = 32 bytes
  * + dominant bytes
- * + run bytes
  * + refinement bytes
  * @endcode
  */
 size_t codec_basic_bitplane_byte_size(const codec_scan_bitplane* bitplane) {
     if (bitplane == NULL) return 0u;
-    return 44u + bitplane->dominant_stream.byte_count +
-           bitplane->run_length_byte_count +
+    return 32u + bitplane->dominant_stream.byte_count +
            bitplane->subordinate_byte_count;
 }
 
@@ -58,18 +56,12 @@ size_t codec_basic_channel_byte_size(
  * entry FILE position
  *   |
  *   v
- * +---------------------------+ 16 bytes
+ * +---------------------------+ 12 bytes
  * | token_count               | u32
- * | command_count             | u32
  * | dominant_bits             | u32
  * | dominant_bytes            | u32
  * +---------------------------+
  * | dominant payload          | dominant_bytes
- * +---------------------------+ 8 bytes
- * | run_bits                  | u32
- * | run_bytes                 | u32
- * +---------------------------+
- * | run payload               | run_bytes
  * +---------------------------+ 16 bytes
  * | refinement_symbols        | u32
  * | refinement_mode           | u32
@@ -86,28 +78,22 @@ size_t codec_basic_channel_byte_size(
  */
 static dic_status write_bitplane(FILE* file,
                                  const codec_scan_bitplane* bp) {
-    uint32_t token_count, command_count, dominant_bits, dominant_bytes;
-    uint32_t run_bits, run_bytes, refinement_symbols, refinement_bits;
-    uint32_t refinement_bytes;
+    uint32_t token_count, dominant_bits, dominant_bytes;
+    uint32_t refinement_symbols, refinement_bits, refinement_bytes;
     if (!bits_size_to_u32(bp->dominant_token_count, &token_count) ||
-        !bits_size_to_u32(bp->dominant_command_count, &command_count) ||
         !bits_size_to_u32(bp->dominant_stream.bit_count, &dominant_bits) ||
         !bits_size_to_u32(bp->dominant_stream.byte_count, &dominant_bytes) ||
-        !bits_size_to_u32(bp->run_length_bit_count, &run_bits) ||
-        !bits_size_to_u32(bp->run_length_byte_count, &run_bytes) ||
         !bits_size_to_u32(bp->subordinate_symbol_count, &refinement_symbols) ||
         !bits_size_to_u32(bp->subordinate_bit_count, &refinement_bits) ||
         !bits_size_to_u32(bp->subordinate_byte_count, &refinement_bytes))
         return DIC_STATUS_INVALID_ARGUMENT;
 
-    if (!bits_write_u32(file, token_count) || !bits_write_u32(file, command_count) ||
-        !bits_write_u32(file, dominant_bits) || !bits_write_u32(file, dominant_bytes) ||
+    if (!bits_write_u32(file, token_count) ||
+        !bits_write_u32(file, dominant_bits) ||
+        !bits_write_u32(file, dominant_bytes) ||
         (dominant_bytes > 0u &&
          fwrite(bp->dominant_stream.bytes, 1u, dominant_bytes, file) !=
              dominant_bytes) ||
-        !bits_write_u32(file, run_bits) || !bits_write_u32(file, run_bytes) ||
-        (run_bytes > 0u &&
-         fwrite(bp->run_length_bits, 1u, run_bytes, file) != run_bytes) ||
         !bits_write_u32(file, refinement_symbols) ||
         !bits_write_u32(file, (uint32_t)bp->subordinate_mode) ||
         !bits_write_u32(file, refinement_bits) ||
@@ -153,34 +139,23 @@ static dic_status read_payload(FILE* file, uint32_t byte_count,
  */
 static dic_status read_bitplane(FILE* file, size_t plane_count,
                                 codec_scan_bitplane* bp) {
-    uint32_t token_count, command_count, dominant_bits, dominant_bytes;
-    uint32_t run_bits, run_bytes, symbols, mode, refinement_bits;
+    uint32_t token_count, dominant_bits, dominant_bytes;
+    uint32_t symbols, mode, refinement_bits;
     uint32_t refinement_bytes, marker;
     dic_status status;
 
     codec_scan_bitplane_init(bp);
-    if (!bits_read_u32(file, &token_count) || !bits_read_u32(file, &command_count) ||
-        !bits_read_u32(file, &dominant_bits) || !bits_read_u32(file, &dominant_bytes))
+    if (!bits_read_u32(file, &token_count) ||
+        !bits_read_u32(file, &dominant_bits) ||
+        !bits_read_u32(file, &dominant_bytes))
         return DIC_HW4_FORMAT_ERROR;
     if ((size_t)token_count > plane_count ||
-        command_count > token_count ||
         (uint64_t)dominant_bits > (uint64_t)dominant_bytes * 8u)
         return DIC_HW4_FORMAT_ERROR;
     bp->dominant_token_count = token_count;
-    bp->dominant_command_count = command_count;
     bp->dominant_stream.bit_count = dominant_bits;
     bp->dominant_stream.byte_count = dominant_bytes;
     status = read_payload(file, dominant_bytes, &bp->dominant_stream.bytes);
-    if (status != DIC_STATUS_OK) goto fail;
-
-    if (!bits_read_u32(file, &run_bits) || !bits_read_u32(file, &run_bytes) ||
-        (uint64_t)run_bits > (uint64_t)run_bytes * 8u) {
-        status = DIC_HW4_FORMAT_ERROR;
-        goto fail;
-    }
-    bp->run_length_bit_count = run_bits;
-    bp->run_length_byte_count = run_bytes;
-    status = read_payload(file, run_bytes, &bp->run_length_bits);
     if (status != DIC_STATUS_OK) goto fail;
 
     if (!bits_read_u32(file, &symbols) || !bits_read_u32(file, &mode) ||
@@ -239,8 +214,7 @@ static dic_status validate_encoded(
 /** @brief Finds the number of layer iterations required by all channels. */
 static int maximum_bitplanes(const codec_basic_encoded_image* encoded) {
     int maximum = 0;
-    int channel;
-    for (channel = 0; channel < encoded->channels; ++channel) {
+    for (int channel = 0; channel < encoded->channels; ++channel) {
         int count = encoded->channel_streams[channel].num_bitplanes;
         if (count > maximum) maximum = count;
     }
@@ -248,12 +222,12 @@ static int maximum_bitplanes(const codec_basic_encoded_image* encoded) {
 }
 
 /**
- * @brief Writes a DICW header followed by layer-major bit-plane blocks.
+ * @brief Writes header followed by layer-major bit-plane blocks.
  *
  * @code{.unparsed}
  * current cursor
  *   |
- *   +-> DICW fixed header
+ *   +-> fixed header
  *   +-> maximum layer count and all channel counts
  *   +-> layer 0: ch0 bp0, ch1 bp0, ... , 0xfffffffe
  *   `-> layer 1: ch0 bp1, ch1 bp1, ... , 0xfffffffe
@@ -387,7 +361,6 @@ fail:
     return status;
 }
 
-/** @brief Opens @p path and delegates DICW emission to the stream writer. */
 dic_status codec_basic_write_file(const char* path,
                                   const codec_basic_encoded_image* encoded) {
     FILE* file;
@@ -401,9 +374,6 @@ dic_status codec_basic_write_file(const char* path,
     return status;
 }
 
-/**
- * @brief Reads exactly one DICW file and rejects any trailing byte.
- */
 dic_status codec_basic_read_file(const char* path,
                                  codec_basic_encoded_image* encoded) {
     FILE* file;
