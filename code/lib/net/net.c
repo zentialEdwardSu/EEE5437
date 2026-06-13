@@ -108,6 +108,8 @@ static void net_throttle(net_control* control, size_t byte_count) {
         ++milliseconds;
     if (milliseconds > 0xffffffffu) milliseconds = 0xffffffffu;
 
+    // sleep for the theoratical time it would take to send the data at the configured rate
+    // and send it
     net_platform_sleep_ms((uint32_t)milliseconds);
 }
 

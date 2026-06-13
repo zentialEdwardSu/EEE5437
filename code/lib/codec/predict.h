@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file predict.h
- * @brief Horizontal DPCM operation for the lowest LL wavelet subband.
+ * @brief Horizontal operation for the lowest LL wavelet subband.
  *
  * Prediction is reset at each row boundary:
  *

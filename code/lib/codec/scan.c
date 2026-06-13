@@ -509,21 +509,22 @@ typedef struct codec_scan_arith_model {
     uint32_t one[CODEC_SCAN_ARITH_CONTEXTS];
 } codec_scan_arith_model;
 
+// init model with laplace smoothing
 static void codec_scan_arith_model_init(codec_scan_arith_model* model) {
-    int i;
-    for (i = 0; i < CODEC_SCAN_ARITH_CONTEXTS; ++i) {
+    for (int i = 0; i < CODEC_SCAN_ARITH_CONTEXTS; ++i) {
         model->zero[i] = 1u;
         model->one[i] = 1u;
     }
 }
 
+// scaling so freqs will not overflow
 static void codec_scan_arith_model_update(codec_scan_arith_model* model,
                                           unsigned int context, int bit) {
     uint32_t total;
     if (bit)
-        ++model->one[context];
+        model->one[context]++;
     else
-        ++model->zero[context];
+        model->zero[context]++;
     total = model->zero[context] + model->one[context];
     if (total >= CODEC_SCAN_ARITH_SCALE) {
         model->zero[context] = (model->zero[context] + 1u) / 2u;
@@ -568,18 +569,18 @@ static dic_status codec_scan_arithmetic_encode(const unsigned char* bits,
     const uint64_t third_qtr = 0xc0000000ULL;
     codec_scan_arith_model model;
     uint64_t low = 0u, high = top;
+    // for underflow expansion
     size_t pending = 0u;
-    size_t i;
-    size_t capacity;
 
     if (count > (SIZE_MAX - 128u) / 16u) return DIC_STATUS_INVALID_ARGUMENT;
-    capacity = count * 16u + 128u;
+    size_t capacity = count * 16u + 128u;
     if (bits_lsb_writer_ensure_bits(writer, capacity) != DIC_STATUS_OK)
         return DIC_STATUS_MEMORY_ERROR;
     codec_scan_arith_model_init(&model);
 
-    for (i = 0u; i < count; ++i) {
+    for (size_t i = 0u; i < count; i++) {
         unsigned int context = contexts[i];
+        // for encoding each bits, use probs from context to split range
         uint32_t total = model.zero[context] + model.one[context];
         uint64_t range = high - low + 1u;
         uint64_t split = low + (range * model.zero[context]) / total;
@@ -599,7 +600,7 @@ static dic_status codec_scan_arithmetic_encode(const unsigned char* bits,
                 low -= half;
                 high -= half;
             } else if (low >= first_qtr && high < third_qtr) {
-                ++pending;
+                pending++;
                 low -= first_qtr;
                 high -= first_qtr;
             } else {
@@ -607,22 +608,23 @@ static dic_status codec_scan_arithmetic_encode(const unsigned char* bits,
             }
             if (out >= 0) {
                 bits_lsb_write(writer, out);
+                //write pending num of opposite bits
                 while (pending > 0u) {
                     bits_lsb_write(writer, !out);
-                    --pending;
+                    pending--;
                 }
             }
             low <<= 1u;
             high = (high << 1u) | 1u;
         }
     }
-    ++pending;
-    {
+    pending++;
+    {// deal with pending, after break
         int out = low < first_qtr ? 0 : 1;
         bits_lsb_write(writer, out);
         while (pending > 0u) {
             bits_lsb_write(writer, !out);
-            --pending;
+            pending--;
         }
     }
     bits_lsb_writer_flush(writer);
@@ -644,18 +646,17 @@ static dic_status codec_scan_arithmetic_decode(const unsigned char* bytes,
     codec_scan_arith_model model;
     bits_lsb_reader reader;
     uint64_t low = 0u, high = top, value = 0u;
-    size_t i;
 
     if (count > 0u && (bytes == NULL || bits == NULL || bit_count == 0u))
         return DIC_HW4_FORMAT_ERROR;
     codec_scan_arith_model_init(&model);
     bits_lsb_reader_init(&reader, bytes, bit_count);
-    for (i = 0u; i < 32u; ++i)
+    for (size_t i = 0u; i < 32u; ++i)
         value = (value << 1u) | (reader.bits_read < reader.bit_count
                                      ? (uint64_t)bits_lsb_read(&reader)
                                      : 0u);
 
-    for (i = 0u; i < count; ++i) {
+    for (size_t i = 0u; i < count; i++) {
         unsigned int context = contexts[i];
         uint32_t total = model.zero[context] + model.one[context];
         uint64_t range = high - low + 1u;
@@ -710,7 +711,6 @@ static dic_status codec_scan_encode_refinement_pass(
     unsigned char* bits = NULL;
     unsigned char* contexts = NULL;
     bits_lsb_writer arithmetic;
-    size_t i;
     dic_status status;
 
     bitplane->subordinate_symbol_count = refinement_count;
@@ -722,13 +722,16 @@ static dic_status codec_scan_encode_refinement_pass(
         free(contexts);
         return DIC_STATUS_MEMORY_ERROR;
     }
-    for (i = 0u; i < refinement_count; ++i) {
+    for (size_t i = 0u; i < refinement_count; ++i) {
         size_t idx = sig_order->indices[i];
         uint32_t mag = plane[idx] < 0 ? (uint32_t)(-(plane[idx] + 1)) + 1u
                                       : (uint32_t)plane[idx];
         // check if the old significant bit was 1 or 0,
-        // and set the context: 1. no sig around; 2. sig around; 3. already refined before
+        // and set the **context** for CABAC: 1. no sig around; 2. sig around; 3. already refined before
         bits[i] = (unsigned char)((mag >> bp) & 1u);
+        // context = 0 just significant area the second high bit is more possible to be 0;
+        //         = 1 just significant area the second high bit is has equal probs of 0/1;
+        //         = 2 refined before, so simple cant predict;
         contexts[i] = refinement_age[idx] > 0u
                           ? 2u
                           : (unsigned char)(codec_scan_has_significant_neighbor(
@@ -754,7 +757,7 @@ static dic_status codec_scan_encode_refinement_pass(
         bits_lsb_writer_init(&raw);
         status = bits_lsb_writer_ensure_bits(&raw, refinement_count);
         if (status == DIC_STATUS_OK) {
-            for (i = 0u; i < refinement_count; ++i)
+            for (size_t i = 0u; i < refinement_count; i++)
                 bits_lsb_write(&raw, bits[i]);
             bits_lsb_writer_flush(&raw);
             bitplane->subordinate_bits = raw.bytes;

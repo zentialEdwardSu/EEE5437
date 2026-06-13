@@ -1,9 +1,9 @@
 /**
  * @file basic_file.c
- * @brief DICW v10 layer-major stream serialization.
+ * @brief layer-major stream serialization.
  *
  * The implementation deliberately keeps byte-order conversion in the bits
- * module. All helpers here operate on complete logical DICW sections.
+ * module. All helpers here operate on complete logical sections.
  */
 
 #include "codec/basic_file.h"

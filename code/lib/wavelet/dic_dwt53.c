@@ -33,6 +33,7 @@ static inline int32_t dic_dwt53_floor_div4(int32_t value) {
 
 /**
  * @brief lifting scheme implementation of the 5/3 wavelet transform for 1d
+ * @note ref to https://rjwave.org/ijedr/papers/IJEDR1403011.pdf
  * @details 1. split the input into even and odd samples, 2. update the odd
  * samples using the even samples, get the high coefficients, 3. update the even
  * samples using the odd samples, get the low coefficients, 4. interleave the
@@ -80,6 +81,7 @@ static dic_status dic_dwt53_forward_1d(int32_t* samples, int length,
 
 /**
  * @brief inverse lifting scheme implementation of the 5/3 wavelet transform for 1d
+ * @note detail ref to dic_dwt53_forward_1d
  */
 static dic_status dic_dwt53_inverse_1d(int32_t* samples, int length,
                                        int32_t* buffer) {
@@ -146,6 +148,7 @@ static dic_status dic_dwt53_transform_columns(int32_t* plane, int stride,
         dic_status status;
 
         for (int y = 0; y < height; y++)
+            // buffer since the column is not contiguous in memory, collect before transform.
             buffer[y] = plane[((size_t)y * (size_t)stride) + (size_t)x];
 
         status = inverse
